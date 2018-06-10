@@ -11,3 +11,4 @@ categories = ["encoding", "game-engines", "parser-implementations"]
 
 [dependencies]
 byteorder = "1.2.7"
+encoding = "0.2.33"
