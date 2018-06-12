@@ -4,6 +4,7 @@
 extern crate byteorder;
 extern crate encoding;
 extern crate indexmap;
+extern crate serde;
 
 // Модули описания заголовка
 mod sig;
@@ -24,3 +25,6 @@ mod string;
 pub use label::*;
 pub use resref::*;
 pub use string::*;
+
+// Модули для поддержки инфраструктуры serde
+pub mod de;

@@ -5,7 +5,11 @@ use std::fmt;
 use std::error;
 use std::io;
 use std::result;
+use std::str::Utf8Error;
+use std::string::FromUtf8Error;
+use serde::de;
 
+use parser::Token;
 use self::Error::*;
 
 /// Виды ошибок, который могут возникнуть при чтении и интерпретации GFF-файла
@@ -28,6 +32,11 @@ pub enum Error {
   /// Некорректное значение для метки. Метка не должна превышать по длине 16 байт в UTF-8,
   /// но указанное значение больше. Ошибка содержит длину текста, который пытаются преобразовать
   TooLongLabel(usize),
+  /// При десериализации был обнаружен указанный токен, хотя ожидался не он.
+  /// Ожидаемые значения описаны в первом параметре
+  Unexpected(&'static str, Token),
+  /// Ошибка, возникшая при десериализации
+  Deserialize(String),
 }
 /// Тип результата, используемый в методах данной библиотеки
 pub type Result<T> = result::Result<T, Error>;
@@ -40,6 +49,8 @@ impl fmt::Display for Error {
       UnknownValue { tag, value } => write!(fmt, "Unknown field value (tag: {}, value: {})", tag, value),
       ParsingFinished => write!(fmt, "Parsing finished"),
       TooLongLabel(len) => write!(fmt, "Too long label: label can contain up to 16 bytes, but string contains {} bytes in UTF-8", len),
+      Unexpected(ref expected, ref actual) => write!(fmt, "Expected {}, but {:?} found", expected, actual),
+      Deserialize(ref msg) => msg.fmt(fmt),
     }
   }
 }
@@ -52,6 +63,8 @@ impl error::Error for Error {
       UnknownValue { .. } => "Unknown field value",
       ParsingFinished => "Parsing finished",
       TooLongLabel(..) => "Too long label",
+      Unexpected(..) => "Unexpected token",
+      Deserialize(ref msg) => msg,
     }
   }
 
@@ -69,4 +82,16 @@ impl From<io::Error> for Error {
 /// Реализация для конвертации из ошибок кодирования библиотеки `encodings`
 impl From<Cow<'static, str>> for Error {
   fn from(value: Cow<'static, str>) -> Self { Encoding(value) }
+}
+impl From<Utf8Error> for Error {
+  fn from(value: Utf8Error) -> Self { Encoding(error::Error::description(&value).to_string().into()) }
+}
+impl From<FromUtf8Error> for Error {
+  fn from(value: FromUtf8Error) -> Self { Encoding(error::Error::description(&value).to_string().into()) }
+}
+
+impl de::Error for Error {
+  fn custom<T: fmt::Display>(msg: T) -> Self {
+    Deserialize(msg.to_string())
+  }
 }
