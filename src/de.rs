@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 use encoding::{DecoderTrap, EncodingRef};
 use serde::de::{self, Visitor, DeserializeSeed};
 
+use value::SimpleValueRef;
 use error::{Error, Result};
 use parser::{Parser, Token};
 
@@ -73,29 +74,93 @@ macro_rules! unsupported {
     }
   )
 }
+/// Реализует разбор простых типов данных.
+///
+/// # Параметры
+/// - `dser_method`: реализуемый макросом метод
+/// - `visit_method`: метод типажа [`Visitor`], который будет вызван для создания конечного значения
+/// - `type`: тип GFF файла, одно из значений перечисления [`SimpleValueRef`]
+/// 
+/// [`Visitor`]: https://docs.serde.rs/serde/de/trait.Visitor.html
+/// [`SimpleValueRef`]: ../enum.SimpleValueRef.html
+macro_rules! primitive {
+  ($dser_method:ident, $visit_method:ident, $type:ident) => (
+    fn $dser_method<V>(self, visitor: V) -> Result<V::Value>
+      where V: Visitor<'de>,
+    {
+      let token = self.next_token()?;
+      if let Token::Value(SimpleValueRef::$type(value)) = token {
+        return visitor.$visit_method(value);
+      }
+      return Err(Error::Unexpected(stringify!($type), token));
+    }
+  );
+  ($dser_method:ident, $visit_method:ident, $type:ident, $read:ident) => (
+    fn $dser_method<V>(self, visitor: V) -> Result<V::Value>
+      where V: Visitor<'de>,
+    {
+      let token = self.next_token()?;
+      if let Token::Value(SimpleValueRef::$type(value)) = token {
+        return visitor.$visit_method(self.parser.$read(value)?);
+      }
+      return Err(Error::Unexpected(stringify!($type), token));
+    }
+  );
+}
 impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> {
   type Error = Error;
 
   #[inline]
   fn is_human_readable(&self) -> bool { false }
 
-  unsupported!(deserialize_i8);
-  unsupported!(deserialize_u8);
-  unsupported!(deserialize_i16);
-  unsupported!(deserialize_u16);
-  unsupported!(deserialize_i32);
-  unsupported!(deserialize_u32);
-  unsupported!(deserialize_i64);
-  unsupported!(deserialize_u64);
-  unsupported!(deserialize_f32);
-  unsupported!(deserialize_f64);
+  primitive!(deserialize_i8 , visit_i8 , Char);
+  primitive!(deserialize_u8 , visit_u8 , Byte);
+  primitive!(deserialize_i16, visit_i16, Short);
+  primitive!(deserialize_u16, visit_u16, Word);
+  primitive!(deserialize_i32, visit_i32, Int);
+  primitive!(deserialize_u32, visit_u32, Dword);
+  primitive!(deserialize_i64, visit_i64, Int64, read_i64);
+  primitive!(deserialize_u64, visit_u64, Dword64, read_u64);
+  primitive!(deserialize_f32, visit_f32, Float);
+  primitive!(deserialize_f64, visit_f64, Double, read_f64);
 
-  unsupported!(deserialize_bool);
-  unsupported!(deserialize_char);
-  unsupported!(deserialize_str);
-  unsupported!(deserialize_string);
-  unsupported!(deserialize_bytes);
-  unsupported!(deserialize_byte_buf);
+  fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    if let Token::Value(SimpleValueRef::Byte(value)) = token {
+      return visitor.visit_bool(value != 0);
+    }
+    return Err(Error::Unexpected("Byte", token));
+  }
+  fn deserialize_char<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    if let Token::Value(SimpleValueRef::Byte(value)) = token {
+      return visitor.visit_char(value as char);
+    }
+    if let Token::Value(SimpleValueRef::Char(value)) = token {
+      return visitor.visit_char(value as u8 as char);
+    }
+    return Err(Error::Unexpected("Byte, Char", token));
+  }
+
+  #[inline]
+  fn deserialize_str<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    self.deserialize_string(visitor)
+  }
+  primitive!(deserialize_string, visit_string, String, read_string);
+  #[inline]
+  fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    self.deserialize_byte_buf(visitor)
+  }
+  primitive!(deserialize_byte_buf, visit_byte_buf, Void, read_byte_buf);
+
   unsupported!(deserialize_option);
   unsupported!(deserialize_unit);
   unsupported!(deserialize_map);
