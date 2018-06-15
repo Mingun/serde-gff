@@ -107,6 +107,19 @@ macro_rules! primitive {
     }
   );
 }
+macro_rules! complex {
+  ($token:ident, $self:ident, $visitor:ident . $method:ident) => (
+    {
+      let value = $visitor.$method(&mut *$self)?;
+      let token = $self.next_token()?;
+      if let Token::$token = token {
+        Ok(value)
+      } else {
+        Err(Error::Unexpected(stringify!($token), token))
+      }
+    }
+  );
+}
 impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> {
   type Error = Error;
 
@@ -186,8 +199,6 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
       token => Err(Error::Unexpected("RootBegin, ItemBegin, StructBegin", token)),
     }
   }
-  unsupported!(deserialize_map);
-  unsupported!(deserialize_seq);
 
   unsupported!(deserialize_any);
 
@@ -205,6 +216,27 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
       return visitor.visit_str(label.as_str()?);
     }
     return Err(Error::Unexpected("Label", token));
+  }
+
+  fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    match token {
+      Token::RootBegin   { .. } => complex!(RootEnd,   self, visitor.visit_map),
+      Token::ItemBegin   { .. } => complex!(ItemEnd,   self, visitor.visit_map),
+      Token::StructBegin { .. } => complex!(StructEnd, self, visitor.visit_map),
+      token => Err(Error::Unexpected("RootBegin, ItemBegin, StructBegin", token)),
+    }
+  }
+  fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    match token {
+      Token::ListBegin { .. } => complex!(ListEnd, self, visitor.visit_seq),
+      token => Err(Error::Unexpected("ListBegin", token)),
+    }
   }
 
   /// Десериализует любую GFF структуру в `unit`, в остальных случаях выдает ошибку
@@ -233,11 +265,10 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
     let token = self.next_token()?;
     unimplemented!("`deserialize_tuple_struct(name: {}, len: {})` not yet supported. Token: {:?}", name, len, token)
   }
-  fn deserialize_struct<V>(self, name: &'static str, fields: &'static [&'static str], _visitor: V) -> Result<V::Value>
+  fn deserialize_struct<V>(self, _name: &'static str, _fields: &'static [&'static str], visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
   {
-    let token = self.next_token()?;
-    unimplemented!("`deserialize_struct(name: {}, fields: {})` not yet supported. Token: {:?}", name, fields.len(), token)
+    self.deserialize_map(visitor)
   }
   fn deserialize_enum<V>(self, name: &'static str, variants: &'static [&'static str], _visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
@@ -266,6 +297,21 @@ impl<'de, 'a, R: Read + Seek> de::MapAccess<'de> for &'a mut Deserializer<R> {
     where V: DeserializeSeed<'de>,
   {
     seed.deserialize(&mut **self)
+  }
+}
+
+impl<'de, 'a, R: Read + Seek> de::SeqAccess<'de> for &'a mut Deserializer<R> {
+  type Error = Error;
+
+  fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
+    where T: DeserializeSeed<'de>,
+  {
+    let token = self.peek_token()?.clone();
+    match token {
+      Token::ListEnd => Ok(None),
+      Token::ItemBegin { .. } => seed.deserialize(&mut **self).map(Some),
+      token => Err(Error::Unexpected("ItemBegin", token)),
+    }
   }
 }
 
