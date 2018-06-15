@@ -165,14 +165,40 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
   {
     self.deserialize_string(visitor)
   }
-  primitive!(deserialize_string, visit_string, String, read_string);
+  fn deserialize_string<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    match token {
+      Token::Value(SimpleValueRef::String(value)) => {
+        visitor.visit_string(self.parser.read_string(value)?)
+      },
+      Token::Value(SimpleValueRef::ResRef(value)) => {
+        visitor.visit_string(self.parser.read_resref(value)?.as_string()?)
+      },
+      _ => Err(Error::Unexpected("String, ResRef", token)),
+    }
+  }
   #[inline]
   fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
   {
     self.deserialize_byte_buf(visitor)
   }
-  primitive!(deserialize_byte_buf, visit_byte_buf, Void, read_byte_buf);
+  fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    match token {
+      Token::Value(SimpleValueRef::Void(value)) => {
+        visitor.visit_byte_buf(self.parser.read_byte_buf(value)?)
+      },
+      Token::Value(SimpleValueRef::ResRef(value)) => {
+        visitor.visit_byte_buf(self.parser.read_resref(value)?.0)
+      },
+      _ => Err(Error::Unexpected("Void, ResRef", token)),
+    }
+  }
 
   /// Всегда разбирает любое значение, как `Some(...)`, формат не умеет хранить признак
   /// отсутствия значения. `None` в опциональные поля будет записываться только потому,
