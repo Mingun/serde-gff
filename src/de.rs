@@ -161,8 +161,31 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
   }
   primitive!(deserialize_byte_buf, visit_byte_buf, Void, read_byte_buf);
 
-  unsupported!(deserialize_option);
-  unsupported!(deserialize_unit);
+  /// Всегда разбирает любое значение, как `Some(...)`, формат не умеет хранить признак
+  /// отсутствия значения. `None` в опциональные поля будет записываться только потому,
+  /// что при десериализации данное поле не будет найдено
+  #[inline]
+  fn deserialize_option<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    visitor.visit_some(self)
+  }
+  /// Десериализует любую GFF структуру в `unit`, в остальных случаях выдает ошибку
+  #[inline]
+  fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    match token {
+      Token::RootBegin { .. } |
+      Token::ItemBegin { .. } |
+      Token::StructBegin { .. } => {
+        self.parser.skip_next(token);
+        visitor.visit_unit()
+      },
+      token => Err(Error::Unexpected("RootBegin, ItemBegin, StructBegin", token)),
+    }
+  }
   unsupported!(deserialize_map);
   unsupported!(deserialize_seq);
 
@@ -184,17 +207,19 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
     return Err(Error::Unexpected("Label", token));
   }
 
-  fn deserialize_unit_struct<V>(self, name: &'static str, _visitor: V) -> Result<V::Value>
+  /// Десериализует любую GFF структуру в `unit`, в остальных случаях выдает ошибку
+  #[inline]
+  fn deserialize_unit_struct<V>(self, _name: &'static str, visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
   {
-    let token = self.next_token()?;
-    unimplemented!("`deserialize_unit_struct(name: {})` not yet supported. Token: {:?}", name, token)
+    self.deserialize_unit(visitor)
   }
-  fn deserialize_newtype_struct<V>(self, name: &'static str, _visitor: V) -> Result<V::Value>
+  /// Разбирает в newtype структуру нижележащее значение
+  #[inline]
+  fn deserialize_newtype_struct<V>(self, _name: &'static str, visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
   {
-    let token = self.next_token()?;
-    unimplemented!("`deserialize_newtype_struct(name: {})` not yet supported. Token: {:?}", name, token)
+    visitor.visit_newtype_struct(self)
   }
   fn deserialize_tuple<V>(self, len: usize, _visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
