@@ -65,6 +65,33 @@ impl State {
       Finish => Err(Error::ParsingFinished),
     }
   }
+  /// Возвращает состояние такое, что структурный элемент текущего состояния пропускается
+  /// без генерации токенов.
+  ///
+  /// Следующий вызов [`next`] вернет следующий структурный элемент. Например, если токен
+  /// является простым значением, то ничего не делается, т.к. такое значение уже считано
+  /// и состояние и так является корректным. Иными словами, в этой ситуации пропускать
+  /// нечего. Однако если токен сигнализировал о начале структуры или элемента, то пропуск
+  /// возвращает такое состояние, какое бы было бы после генерации соответствующего завершающего
+  /// структурный элемент токена (конец структуры, списка, элемента или корневого элемента).
+  ///
+  /// # Параметры
+  /// - `token`: Токен, полученный предшествующим вызовом [`next`]
+  ///
+  /// [`next`]: #method.next
+  pub fn skip(self, token: Token) -> State {
+    match self {
+      Start(state)      => state.skip(),
+      ReadLabel(state)  => state.skip(),
+      ReadField(state)  => state.skip(),
+      ReadFields(state) => state.skip(token),
+      ReadItems(state)  => state.skip(),
+      EndRoot(state)    => state.skip(),
+      EndStruct(state)  => state.skip(),
+      EndItem(state)    => state.skip(),
+      Finish => unreachable!(),
+    }
+  }
 }
 impl Default for State {
   fn default() -> Self {
@@ -171,6 +198,8 @@ impl<Data: TokenEmitter> ReadStruct<Data> {
 
     Ok((token, state))
   }
+  #[inline]
+  fn skip(self) -> State { *self.state }
 }
 impl Default for ReadStruct<Root> {
   fn default() -> Self {
@@ -193,6 +222,8 @@ impl<Data: TokenEmitter> EndStruct<Data> {
   fn next(self) -> Result<(Token, State)> {
     Ok((self.data.end(), *self.state))
   }
+  #[inline]
+  fn skip(self) -> State { *self.state }
 }
 //--------------------------------------------------------------------------------------------------
 /// Состояние чтения метки поля. Осуществляет переход к нужному полю, чтение метки и типа значения,
@@ -218,6 +249,8 @@ impl ReadLabel {
 
     Ok((token, State::ReadField(state)))
   }
+  #[inline]
+  fn skip(self) -> State { *self.state }
 }
 /// Состояние чтения значения поля. В зависимости от типа значения возвращает токен
 /// простого значения, начала списка или структуры
@@ -256,6 +289,8 @@ impl ReadField {
       },
     }
   }
+  #[inline]
+  fn skip(self) -> State { *self.state }
 }
 //--------------------------------------------------------------------------------------------------
 /// Состояние чтения списка полей. Осуществляет переход к индексу списка и чтение поля
@@ -289,6 +324,12 @@ impl ReadFields {
     };
 
     state.next(parser)
+  }
+  fn skip(self, token: Token) -> State {
+    match token {
+      Token::Value(..) => State::ReadFields(self),
+      _ => self.state.skip(token),
+    }
   }
 }
 //--------------------------------------------------------------------------------------------------
@@ -360,4 +401,6 @@ impl ReadItems {
 
     state.next(parser)
   }
+  #[inline]
+  fn skip(self) -> State { *self.state }
 }
