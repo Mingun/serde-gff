@@ -62,18 +62,35 @@ impl<R: Read + Seek> Deserializer<R> {
       _ => unreachable!(),
     }
   }
+  /// Десериализует все примитивные типы GFF файла (все типы, кроме структур и списков)
+  fn deserialize_value<'de, V>(&mut self, value: SimpleValueRef, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    use self::SimpleValueRef::*;
+
+    match value {
+      Byte(val)     => visitor.visit_u8(val),
+      Char(val)     => visitor.visit_i8(val),
+      Word(val)     => visitor.visit_u16(val),
+      Short(val)    => visitor.visit_i16(val),
+      Dword(val)    => visitor.visit_u32(val),
+      Int(val)      => visitor.visit_i32(val),
+      Dword64(val)  => visitor.visit_u64(self.parser.read_u64(val)?),
+      Int64(val)    => visitor.visit_i64(self.parser.read_i64(val)?),
+      Float(val)    => visitor.visit_f32(val),
+      Double(val)   => visitor.visit_f64(self.parser.read_f64(val)?),
+      String(val)   => visitor.visit_string(self.parser.read_string(val)?),
+      ResRef(val)   => visitor.visit_byte_buf(self.parser.read_resref(val)?.0),
+      LocString(val)=> {
+        let value = self.parser.read_loc_string(val)?;
+        //TODO: реализовать десериализацию LocString
+        Err(Error::Deserialize(format!("Deserialization of LocString not yet implemented: value={:?}", value)))
+      },
+      Void(val)     => visitor.visit_byte_buf(self.parser.read_byte_buf(val)?),
+    }
+  }
 }
 
-macro_rules! unsupported {
-  ($dser_method:ident) => (
-    fn $dser_method<V>(self, _visitor: V) -> Result<V::Value>
-      where V: Visitor<'de>,
-    {
-      let token = self.next_token()?;
-      unimplemented!(concat!(stringify!($dser_method), " not yet supported. Token: {:?}"), token)
-    }
-  )
-}
 /// Реализует разбор простых типов данных.
 ///
 /// # Параметры
@@ -226,11 +243,28 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
     }
   }
 
-  unsupported!(deserialize_any);
-
+  fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.next_token()?;
+    match token {
+      Token::Value(value)       => self.deserialize_value(value, visitor),
+      Token::ListBegin { .. }   => complex!(ListEnd, self, visitor.visit_seq),
+      Token::RootBegin { .. }   => complex!(RootEnd, self, visitor.visit_map),
+      Token::ItemBegin { .. }   => complex!(ItemEnd, self, visitor.visit_map),
+      Token::StructBegin { .. } => complex!(StructEnd, self, visitor.visit_map),
+      Token::Label(index) => {
+        let label = self.parser.read_label(index)?;
+        visitor.visit_str(label.as_str()?)
+      },
+      _ => unimplemented!("`deserialize_any`, token: {:?}", token)
+    }
+  }
   fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
   {
+    let token = self.next_token()?;
+    self.parser.skip_next(token);
     visitor.visit_none()
   }
   fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
