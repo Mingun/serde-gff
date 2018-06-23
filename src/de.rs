@@ -267,15 +267,26 @@ impl<'de, 'a, R: Read + Seek> de::Deserializer<'de> for &'a mut Deserializer<R> 
     self.parser.skip_next(token);
     visitor.visit_none()
   }
+  /// Данный метод вызывается при необходимости десериализовать идентификатор перечисления
   fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
   {
+    use self::SimpleValueRef::*;
+
     let token = self.next_token()?;
-    if let Token::Label(index) = token {
-      let label = self.parser.read_label(index)?;
-      return visitor.visit_str(label.as_str()?);
+    match token {
+      //TODO: После решения https://github.com/serde-rs/serde/issues/745 можно будет передавать числа
+      Token::Value(Byte(val))     => visitor.visit_string(val.to_string()),
+      Token::Value(Char(val))     => visitor.visit_string(val.to_string()),
+      Token::Value(Word(val))     => visitor.visit_string(val.to_string()),
+      Token::Value(Short(val))    => visitor.visit_string(val.to_string()),
+      Token::Value(Dword(val))    => visitor.visit_string(val.to_string()),
+      Token::Value(Int(val))      => visitor.visit_string(val.to_string()),
+      Token::Value(Dword64(val))  => visitor.visit_string(self.parser.read_u64(val)?.to_string()),
+      Token::Value(Int64(val))    => visitor.visit_string(self.parser.read_i64(val)?.to_string()),
+      Token::Value(String(val))   => visitor.visit_string(self.parser.read_string(val)?),
+      _ => Err(Error::Unexpected("Byte, Char, Word, Short, Dword, Int, Int64, String", token)),
     }
-    return Err(Error::Unexpected("Label", token));
   }
 
   fn deserialize_map<V>(self, visitor: V) -> Result<V::Value>
@@ -347,7 +358,7 @@ impl<'de, 'a, R: Read + Seek> de::MapAccess<'de> for &'a mut Deserializer<R> {
     let token = self.peek_token()?.clone();
     match token {
       Token::RootEnd | Token::ItemEnd | Token::StructEnd => Ok(None),
-      Token::Label(..) => seed.deserialize(&mut **self).map(Some),
+      Token::Label(..) => seed.deserialize(Field(&mut **self)).map(Some),
       token => Err(Error::Unexpected("Label", token)),
     }
   }
@@ -372,6 +383,96 @@ impl<'de, 'a, R: Read + Seek> de::SeqAccess<'de> for &'a mut Deserializer<R> {
       Token::ItemBegin { .. } => seed.deserialize(&mut **self).map(Some),
       token => Err(Error::Unexpected("ItemBegin", token)),
     }
+  }
+}
+
+macro_rules! delegate {
+  ($dser_method:ident) => (
+    #[inline]
+    fn $dser_method<V>(self, visitor: V) -> Result<V::Value>
+      where V: Visitor<'de>,
+    {
+      (self.0).$dser_method(visitor)
+    }
+  );
+  ($dser_method:ident, name) => (
+    #[inline]
+    fn $dser_method<V>(self, name: &'static str, visitor: V) -> Result<V::Value>
+      where V: Visitor<'de>,
+    {
+      (self.0).$dser_method(name, visitor)
+    }
+  );
+  ($dser_method:ident, names) => (
+    #[inline]
+    fn $dser_method<V>(self, name: &'static str, fields: &'static [&'static str], visitor: V) -> Result<V::Value>
+      where V: Visitor<'de>,
+    {
+      (self.0).$dser_method(name, fields, visitor)
+    }
+  );
+}
+/// Десериализатор для чтения идентификаторов полей
+struct Field<'a, R: 'a + Read + Seek>(&'a mut Deserializer<R>);
+
+impl<'de, 'a, R: 'a + Read + Seek> de::Deserializer<'de> for Field<'a, R> {
+  type Error = Error;
+
+  #[inline]
+  fn is_human_readable(&self) -> bool { false }
+
+  fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    let token = self.0.next_token()?;
+    if let Token::Label(index) = token {
+      let label = self.0.parser.read_label(index)?;
+      return visitor.visit_str(label.as_str()?);
+    }
+    return Err(Error::Unexpected("Label", token));
+  }
+
+  delegate!(deserialize_i8);
+  delegate!(deserialize_u8);
+  delegate!(deserialize_i16);
+  delegate!(deserialize_u16);
+  delegate!(deserialize_i32);
+  delegate!(deserialize_u32);
+  delegate!(deserialize_i64);
+  delegate!(deserialize_u64);
+  delegate!(deserialize_f32);
+  delegate!(deserialize_f64);
+
+  delegate!(deserialize_bool);
+  delegate!(deserialize_char);
+  delegate!(deserialize_str);
+  delegate!(deserialize_string);
+  delegate!(deserialize_bytes);
+  delegate!(deserialize_byte_buf);
+  delegate!(deserialize_option);
+  delegate!(deserialize_unit);
+  delegate!(deserialize_map);
+  delegate!(deserialize_seq);
+
+  delegate!(deserialize_any);
+  delegate!(deserialize_ignored_any);
+
+  delegate!(deserialize_unit_struct, name);
+  delegate!(deserialize_newtype_struct, name);
+  delegate!(deserialize_struct, names);
+  delegate!(deserialize_enum, names);
+
+  #[inline]
+  fn deserialize_tuple<V>(self, len: usize, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    self.0.deserialize_tuple(len, visitor)
+  }
+  #[inline]
+  fn deserialize_tuple_struct<V>(self, name: &'static str, len: usize, visitor: V) -> Result<V::Value>
+    where V: Visitor<'de>,
+  {
+    self.0.deserialize_tuple_struct(name, len, visitor)
   }
 }
 
