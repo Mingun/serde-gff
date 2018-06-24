@@ -8,6 +8,7 @@ use std::result;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use serde::de;
+use serde::ser;
 
 use parser::Token;
 use self::Error::*;
@@ -37,6 +38,8 @@ pub enum Error {
   Unexpected(&'static str, Token),
   /// Ошибка, возникшая при десериализации
   Deserialize(String),
+  /// Ошибка, возникшая при сериализации
+  Serialize(String),
 }
 /// Тип результата, используемый в методах данной библиотеки
 pub type Result<T> = result::Result<T, Error>;
@@ -51,6 +54,7 @@ impl fmt::Display for Error {
       TooLongLabel(len) => write!(fmt, "Too long label: label can contain up to 16 bytes, but string contains {} bytes in UTF-8", len),
       Unexpected(ref expected, ref actual) => write!(fmt, "Expected {}, but {:?} found", expected, actual),
       Deserialize(ref msg) => msg.fmt(fmt),
+      Serialize(ref msg) => msg.fmt(fmt),
     }
   }
 }
@@ -65,6 +69,7 @@ impl error::Error for Error {
       TooLongLabel(..) => "Too long label",
       Unexpected(..) => "Unexpected token",
       Deserialize(ref msg) => msg,
+      Serialize(ref msg) => msg,
     }
   }
 
@@ -93,5 +98,10 @@ impl From<FromUtf8Error> for Error {
 impl de::Error for Error {
   fn custom<T: fmt::Display>(msg: T) -> Self {
     Deserialize(msg.to_string())
+  }
+}
+impl ser::Error for Error {
+  fn custom<T: fmt::Display>(msg: T) -> Self {
+    Error::Serialize(msg.to_string())
   }
 }

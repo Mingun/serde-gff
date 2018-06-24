@@ -31,3 +31,4 @@ pub use string::*;
 
 // Модули для поддержки инфраструктуры serde
 pub mod de;
+pub mod ser;
