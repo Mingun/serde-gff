@@ -3,7 +3,7 @@
 use std::io::Write;
 use byteorder::{LE, WriteBytesExt};
 use indexmap::IndexSet;
-use serde::ser::{self, Impossible, Serialize};
+use serde::ser::{self, Impossible, Serialize, SerializeStruct};
 
 use Label;
 use error::{Error, Result};
@@ -340,7 +340,10 @@ pub fn to_vec<T>(signature: Signature, value: &T) -> Result<Vec<u8>>
 /// в структуру
 macro_rules! unsupported {
   ($ser_method:ident ( $($type:ty),* ) ) => (
-    fn $ser_method(self, $(_: $type),*) -> Result<Self::Ok> {
+    unsupported!($ser_method($($type),*) -> Self::Ok);
+  );
+  ($ser_method:ident ( $($type:ty),* ) -> $result:ty) => (
+    fn $ser_method(self, $(_: $type),*) -> Result<$result> {
       Err(Error::Serialize(concat!(
         "`", stringify!($ser_method), "` can't be implemented in GFF format. Wrap value to the struct and serialize struct"
       ).into()))
@@ -357,7 +360,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
   type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
   type SerializeMap = Impossible<Self::Ok, Self::Error>;
-  type SerializeStruct = Impossible<Self::Ok, Self::Error>;
+  type SerializeStruct = StructSerializer<'a>;
   type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
 
   unsupported!(serialize_i8(i8));
@@ -378,27 +381,31 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   unsupported!(serialize_str(&str));
   unsupported!(serialize_bytes(&[u8]));
 
+  #[inline]
   fn serialize_none(self) -> Result<Self::Ok> {
-    unimplemented!("`serialize_none()`");
+    self.serialize_unit()
   }
   fn serialize_some<T>(self, value: &T) -> Result<Self::Ok>
     where T: ?Sized + Serialize,
   {
-    unimplemented!("`serialize_some()`");
+    value.serialize(self)
   }
   //-----------------------------------------------------------------------------------------------
   // Сериализация структурных элементов
   //-----------------------------------------------------------------------------------------------
+  #[inline]
   fn serialize_unit(self) -> Result<Self::Ok> {
-    unimplemented!("`serialize_unit()`");
+    self.add_struct(0);
+    Ok(())
   }
-  fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok> {
-    unimplemented!("`serialize_unit_struct(name: {})`", name);
+  #[inline]
+  fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok> {
+    self.serialize_unit()
   }
-  fn serialize_newtype_struct<T>(self, name: &'static str, value: &T) -> Result<Self::Ok>
+  fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<Self::Ok>
     where T: ?Sized + Serialize,
   {
-    unimplemented!("`serialize_newtype_struct(name: {})`", name);
+    value.serialize(self)
   }
   fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
     unimplemented!("`serialize_tuple(len: {})`", len);
@@ -406,8 +413,189 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
     unimplemented!("`serialize_tuple_struct(name: {}, len: {})`", name, len);
   }
-  fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
-    unimplemented!("`serialize_struct(name: {}, len: {})`", name, len);
+  fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
+    let (struct_index, fields_index) = self.add_struct(len);
+    Ok(StructSerializer { ser: self, struct_index, fields_index })
+  }
+  //-----------------------------------------------------------------------------------------------
+  // Сериализация последовательностей и отображений
+  //-----------------------------------------------------------------------------------------------
+  unsupported!(serialize_seq(Option<usize>) -> Self::SerializeSeq);
+  fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
+    unimplemented!("`serialize_map(len: {:?})`", len);
+  }
+  //-----------------------------------------------------------------------------------------------
+  // Сериализация компонентов перечисления
+  //-----------------------------------------------------------------------------------------------
+  fn serialize_unit_variant(self, name: &'static str, index: u32, variant: &'static str) -> Result<Self::Ok> {
+    unimplemented!("`serialize_unit_variant(name: {}, index: {}, variant: {})`", name, index, variant);
+  }
+  fn serialize_newtype_variant<T>(self, name: &'static str, index: u32, variant: &'static str, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    unimplemented!("`serialize_newtype_variant(name: {}, index: {}, variant: {})`", name, index, variant);
+  }
+  fn serialize_tuple_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
+    unimplemented!("`serialize_tuple_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
+  }
+  fn serialize_struct_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
+    unimplemented!("`serialize_struct_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
+  }
+}
+
+/// Сериализатор, записывающий значение поля
+struct FieldSerializer<'a> {
+  /// Хранилище записываемых данных
+  ser: &'a mut Serializer,
+  /// Номер метки, ассоциированной с сериализуемым полем
+  label: LabelIndex,
+}
+impl<'a> FieldSerializer<'a> {
+  /// Добавляет в список структур новую структуру с указанным количеством полей, а
+  /// в список полей -- новое поле типа "структура".
+  ///
+  /// Корректная ссылка на данные еще не заполнена, ее нужно будет скорректировать
+  /// после того, как содержимое структуры будет записано
+  ///
+  /// Возвращает пару индексов: добавленной структуры и списка с полями структуры,
+  /// если полей несколько
+  fn add_struct(&mut self, fields: usize) -> Result<(StructIndex, FieldListIndex)> {
+    // Добавляем запись о структуре
+    let (struct_index, fields_index) = self.ser.add_struct(fields);
+
+    self.ser.fields.push(Field::Struct {
+      label: self.label,
+      struct_: struct_index
+    });
+    Ok((struct_index, fields_index))
+  }
+}
+/// Записывает значения поля, чей размер не превышает 4 байта
+macro_rules! primitive {
+  ($ser_method:ident, $type:ty, $tag:ident) => (
+    #[inline]
+    fn $ser_method(self, v: $type) -> Result<Self::Ok> {
+      self.ser.fields.push(Field::Simple {
+        label: self.label,
+        value: SimpleValueRef::$tag(v)
+      });
+      Ok(())
+    }
+  );
+}
+/// Записывает значения поля, чей размер превышает 4 байта
+macro_rules! complex {
+  ($ser_method:ident, $type:ty, $tag:ident, $write_method:ident) => (
+    #[inline]
+    fn $ser_method(self, v: $type) -> Result<Self::Ok> {
+      let offset = self.ser.field_data.len() as u32;
+      // Записываем данные поля в сторонке
+      self.ser.field_data.$write_method::<LE>(v)?;
+
+      // Добавляем само поле
+      self.ser.fields.push(Field::Simple {
+        label: self.label,
+        value: SimpleValueRef::$tag(offset.into())
+      });
+      Ok(())
+    }
+  );
+  ($ser_method:ident, $type:ty, $tag:ident) => (
+    #[inline]
+    fn $ser_method(self, v: $type) -> Result<Self::Ok> {
+      let offset = self.ser.field_data.len() as u32;
+      // Записываем данные поля в сторонке
+      self.ser.field_data.write_u32::<LE>(v.len() as u32)?;
+      self.ser.field_data.write_all(v.as_ref())?;
+
+      // Добавляем само поле
+      self.ser.fields.push(Field::Simple {
+        label: self.label,
+        value: SimpleValueRef::$tag(offset.into())
+      });
+      Ok(())
+    }
+  );
+}
+impl<'a> ser::Serializer for FieldSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  type SerializeSeq = Impossible<Self::Ok, Self::Error>;
+  type SerializeTuple = Impossible<Self::Ok, Self::Error>;
+  type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
+  type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
+  type SerializeMap = Impossible<Self::Ok, Self::Error>;
+  type SerializeStruct = StructSerializer<'a>;
+  type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
+
+  primitive!(serialize_u8 , u8 , Byte);
+  primitive!(serialize_i8 , i8 , Char);
+  primitive!(serialize_u16, u16, Word);
+  primitive!(serialize_i16, i16, Short);
+  primitive!(serialize_u32, u32, Dword);
+  primitive!(serialize_i32, i32, Int);
+  complex!  (serialize_u64, u64, Dword64, write_u64);
+  complex!  (serialize_i64, i64, Int64, write_i64);
+
+  primitive!(serialize_f32, f32, Float);
+  complex!  (serialize_f64, f64, Double, write_f64);
+
+  /// Формат не поддерживает сериализацию булевых значений, поэтому значение сериализуется,
+  /// как `u8`: `true` представляется в виде `1`, а `false` -- в виде `0`.
+  #[inline]
+  fn serialize_bool(self, v: bool) -> Result<Self::Ok> {
+    self.serialize_u8(if v { 1 } else { 0 })
+  }
+  /// Формат не поддерживает сериализацию произвольных символов как отдельную сущность, поэтому
+  /// они сериализуются, как строка из одного символа
+  #[inline]
+  fn serialize_char(self, v: char) -> Result<Self::Ok> {
+    let mut data = [0u8; 4];
+    self.serialize_str(v.encode_utf8(&mut data))
+  }
+
+  complex!(serialize_str  , &str , String);
+  complex!(serialize_bytes, &[u8], Void);
+
+  #[inline]
+  fn serialize_none(self) -> Result<Self::Ok> {
+    self.serialize_unit()
+  }
+  #[inline]
+  fn serialize_some<T>(self, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    value.serialize(self)
+  }
+  //-----------------------------------------------------------------------------------------------
+  // Сериализация структурных элементов
+  //-----------------------------------------------------------------------------------------------
+  #[inline]
+  fn serialize_unit(mut self) -> Result<Self::Ok> {
+    self.add_struct(0)?;
+    Ok(())
+  }
+  #[inline]
+  fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok> {
+    self.serialize_unit()
+  }
+  #[inline]
+  fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    value.serialize(self)
+  }
+  fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
+    unimplemented!("`serialize_tuple(len: {})`", len);
+  }
+  fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
+    unimplemented!("`serialize_tuple_struct(name: {}, len: {})`", name, len);
+  }
+  #[inline]
+  fn serialize_struct(mut self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
+    let (struct_index, fields_index) = self.add_struct(len)?;
+    Ok(StructSerializer { ser: self.ser, struct_index, fields_index })
   }
   //-----------------------------------------------------------------------------------------------
   // Сериализация последовательностей и отображений
@@ -435,6 +623,53 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   fn serialize_struct_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
     unimplemented!("`serialize_struct_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
   }
+}
+
+/// Сериализует все поля структуры, заполняя массив с индексами полей (если полей
+/// в структуре несколько) или обновляя индекс в структуре на поле, если поле одно.
+pub struct StructSerializer<'a> {
+  /// Хранилище записываемых данных
+  ser: &'a mut Serializer,
+  /// Номер структуры в массиве `ser.structs`, которую нужно обновить по завершении
+  /// сериализации структуры
+  struct_index: StructIndex,
+  /// Номер списка полей в массиве `ser.field_indices`, в который необходимо помещать
+  /// индексы полей по мере их сериализации
+  fields_index: FieldListIndex,
+}
+impl<'a> SerializeStruct for StructSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    use self::Struct::*;
+
+    // Добавляем запись о метке
+    let label = self.ser.add_label(key)?;
+    let index = self.ser.fields.len();
+    value.serialize(FieldSerializer { ser: self.ser, label })?;
+    // Обновляем ссылки из записи о структуре
+    let struct_ = &mut self.ser.structs[self.struct_index.0];
+    match struct_ {
+      // Если полей нет, ничего делать не нужно
+      NoFields => {},
+      // Если поле одно, то структура хранит ссылку на само поле
+      OneField(ref mut idx) => *idx = index,
+      MultiField {..} => {
+        // Если полей несколько, то структура содержит ссылку на список с полями. Добавляем
+        // индекс этого поля в нее
+        let fields = &mut self.ser.field_indices[self.fields_index.0];
+        fields.push(index as u32);
+      },
+    };
+    Ok(())
+  }
+
+  #[inline]
+  fn end(self) -> Result<Self::Ok> { Ok(()) }
 }
 
 #[cfg(test)]
