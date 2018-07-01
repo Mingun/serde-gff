@@ -1,12 +1,16 @@
 //! Сериализатор для формата Bioware GFF (Generic File Format)
 
+use std::io::Write;
+use byteorder::{LE, WriteBytesExt};
 use indexmap::IndexSet;
 use serde::ser::{self, Impossible, Serialize};
 
 use Label;
 use error::{Error, Result};
+use header::{Header, Section, Signature, Version};
 use index::LabelIndex;
 use value::SimpleValueRef;
+use raw::{self, FieldType};
 
 /// Вспомогательная структура, описывающая индекс структуры, для типобезопасности
 #[derive(Debug, Copy, Clone)]
@@ -34,6 +38,19 @@ enum Struct {
   /// Структура, состоящая из двух и более полей. Содержит индекс списка и количество полей
   MultiField { list: FieldListIndex, fields: u32 }
 }
+impl Struct {
+  /// Преобразует промежуточное представление в окончательное, которое может быть записано в файл
+  #[inline]
+  fn into_raw(&self, offsets: &[u32]) -> raw::Struct {
+    use self::Struct::*;
+
+    match *self {
+      NoFields                    => raw::Struct { tag: 0, offset: 0,               fields: 0 },
+      OneField(index)             => raw::Struct { tag: 0, offset: index as u32,    fields: 1 },
+      MultiField { list, fields } => raw::Struct { tag: 0, offset: offsets[list.0], fields },
+    }
+  }
+}
 
 /// Промежуточное представление сериализуемого поля структуры. Содержит данные, которые после
 /// небольшого преобразования, возможного только после окончания сериализации, могут
@@ -48,6 +65,62 @@ enum Field {
   /// Поле, представленное списком значений. Содержит метку поля и индекс списка в массиве
   /// [`list_indices`](struct.Serializer.html#field.list_indices)
   List   { label: LabelIndex, list: ListIndex },
+}
+impl Field {
+  /// Преобразует промежуточное представление в окончательное, которое может быть записано в файл
+  #[inline]
+  fn into_raw(&self, offsets: &[u32]) -> Result<raw::Field> {
+    use self::Field::*;
+
+    Ok(match self {
+      Simple { label, value } => value.into_raw(label.0)?,
+      Struct { label, struct_ } => {
+        let mut data = [0u8; 4];
+        (&mut data[..]).write_u32::<LE>(struct_.0 as u32)?;
+        raw::Field { tag: FieldType::Struct as u32, label: label.0, data }
+      },
+      List { label, list } => {
+        let offset = offsets[list.0];
+
+        let mut data = [0u8; 4];
+        (&mut data[..]).write_u32::<LE>(offset)?;
+        raw::Field { tag: FieldType::List as u32, label: label.0, data }
+      },
+    })
+  }
+}
+
+impl SimpleValueRef {
+  /// Конвертирует возможно ссылочное значение в структуру, которая может быть записана в файл
+  ///
+  /// # Параметры
+  /// - `label`: индекс метки для поля
+  #[inline]
+  fn into_raw(&self, label: u32) -> Result<raw::Field> {
+    use self::SimpleValueRef::*;
+
+    let mut data = [0u8; 4];
+    let type_ = {
+      let mut storage = &mut data[..];
+      match *self {
+        Byte(val)      => { storage.write_u8       (val  )?; FieldType::Byte      },
+        Char(val)      => { storage.write_i8       (val  )?; FieldType::Char      },
+        Word(val)      => { storage.write_u16::<LE>(val  )?; FieldType::Word      },
+        Short(val)     => { storage.write_i16::<LE>(val  )?; FieldType::Short     },
+        Dword(val)     => { storage.write_u32::<LE>(val  )?; FieldType::Dword     },
+        Int(val)       => { storage.write_i32::<LE>(val  )?; FieldType::Int       },
+        Dword64(val)   => { storage.write_u32::<LE>(val.0)?; FieldType::Dword64   },
+        Int64(val)     => { storage.write_u32::<LE>(val.0)?; FieldType::Int64     },
+        Float(val)     => { storage.write_f32::<LE>(val  )?; FieldType::Float     },
+        Double(val)    => { storage.write_u32::<LE>(val.0)?; FieldType::Double    },
+        String(val)    => { storage.write_u32::<LE>(val.0)?; FieldType::String    },
+        ResRef(val)    => { storage.write_u32::<LE>(val.0)?; FieldType::ResRef    },
+        LocString(val) => { storage.write_u32::<LE>(val.0)?; FieldType::LocString },
+        Void(val)      => { storage.write_u32::<LE>(val.0)?; FieldType::Void      },
+      }
+    };
+    Ok(raw::Field { tag: type_ as u32, label, data })
+  }
 }
 
 /// Структура для сериализации значения Rust в Bioware GFF.
@@ -126,6 +199,140 @@ impl Serializer {
     self.fields.push(Field::List { label, list });
     list
   }
+  /// Создает заголовок файла на основе его содержания
+  fn make_header(&self, signature: Signature, version: Version) -> Header {
+    struct Builder {
+      offset: u32,
+    }
+    impl Builder {
+      #[inline]
+      fn new() -> Self {
+        // Версия, сигнатура и 6 секций
+        Builder { offset: 4 + 4 + 8 * 6 }
+      }
+      #[inline]
+      fn add_section(&mut self, count: usize, size: u32) -> Section {
+        let section = Section { offset: self.offset, count: count as u32 };
+        self.offset += section.count * size;
+        section
+      }
+      /// Создает секцию, подсчитывая количество байт во всех списках массива `vec`
+      #[inline]
+      fn fields(&mut self, vec: &Vec<Vec<u32>>) -> Section {
+        let cnt = vec.into_iter().fold(0, |sum, v| sum + v.len());
+        self.add_section(cnt * 4, 1)// Количество в данной секции задается в байтах, а не элементах
+      }
+      #[inline]
+      fn lists(&mut self, vec: &Vec<Vec<u32>>) -> Section {
+        let cnt = vec.into_iter().fold(0, |sum, v| sum + v.len() + 1);
+        self.add_section(cnt * 4, 1)// Количество в данной секции задается в байтах, а не элементах
+      }
+    }
+
+    let mut builder = Builder::new();
+    Header {
+      signature:     signature,
+      version:       version,
+      structs:       builder.add_section(self.structs.len(), 3 * 4),// 3 * u32
+      fields:        builder.add_section(self.fields.len(),  3 * 4),// 3 * u32
+      labels:        builder.add_section(self.labels.len(), 16 * 1),// 16 * u8
+      field_data:    builder.add_section(self.field_data.len(), 1), // 1 * u8
+      field_indices: builder.fields(&self.field_indices),
+      list_indices:  builder.lists(&self.list_indices),
+    }
+  }
+  /// Записывает в поток все собранные данные
+  pub fn write<W: Write>(&self, writer: &mut W, signature: Signature, version: Version) -> Result<()> {
+    self.make_header(signature, version).write(writer)?;
+
+    self.write_structs(writer)?;
+    self.write_fields(writer)?;
+    self.write_labels(writer)?;
+    writer.write_all(&self.field_data)?;
+    for ref list in &self.field_indices {
+      self.write_indices(writer, list)?;
+    }
+    for ref list in &self.list_indices {
+      writer.write_u32::<LE>(list.len() as u32)?;
+      self.write_indices(writer, list)?;
+    }
+    Ok(())
+  }
+  /// Записывает в поток информацию о структурах файла
+  #[inline]
+  fn write_structs<W: Write>(&self, writer: &mut W) -> Result<()> {
+    let offsets = self.calc_field_offsets();
+    for e in self.structs.iter() {
+      e.into_raw(&offsets).write(writer)?;
+    }
+    Ok(())
+  }
+  /// Записывает в поток информацию о полях файла
+  #[inline]
+  fn write_fields<W: Write>(&self, writer: &mut W) -> Result<()> {
+    let offsets = self.calc_list_offsets();
+    for e in self.fields.iter() {
+      e.into_raw(&offsets)?.write(writer)?;
+    }
+    Ok(())
+  }
+  /// Записывает в поток информацию о метках файла
+  #[inline]
+  fn write_labels<W: Write>(&self, writer: &mut W) -> Result<()> {
+    for label in self.labels.iter() {
+      writer.write_all(label.as_ref())?;
+    }
+    Ok(())
+  }
+  /// Записывает в поток информацию об индексах файла
+  #[inline]
+  fn write_indices<W: Write>(&self, writer: &mut W, indices: &Vec<u32>) -> Result<()> {
+    for index in indices.iter() {
+      writer.write_u32::<LE>(*index)?;
+    }
+    Ok(())
+  }
+  /// Вычисляет смещения, на которые нужно заменить индексы в структурах для ссылки на списки их полей
+  fn calc_field_offsets(&self) -> Vec<u32> {
+    let mut offsets = Vec::with_capacity(self.field_indices.len());
+    let mut last_offset = 0;
+    for elements in self.field_indices.iter() {
+      offsets.push(last_offset as u32);
+      last_offset += elements.len() * 4;
+    }
+    offsets
+  }
+  /// Вычисляет смещения, на которые нужно заменить индексы, хранимые в поле с типом List
+  fn calc_list_offsets(&self) -> Vec<u32> {
+    let mut offsets = Vec::with_capacity(self.list_indices.len());
+    let mut last_offset = 0;
+    for elements in self.list_indices.iter() {
+      offsets.push(last_offset as u32);
+      // +1 для длины списка
+      last_offset += (elements.len() + 1) * 4;
+    }
+    offsets
+  }
+}
+
+/// Сериализует значение в произвольный поток. Значение должно являться Rust структурой или перечислением
+#[inline]
+pub fn to_writer<W, T>(writer: &mut W, signature: Signature, value: &T) -> Result<()>
+  where W: Write,
+        T: Serialize + ?Sized,
+{
+  let mut s = Serializer::default();
+  value.serialize(&mut s)?;
+  s.write(writer, signature, Version::V3_2)
+}
+/// Сериализует значение в массив. Значение должно являться Rust структурой или перечислением
+#[inline]
+pub fn to_vec<T>(signature: Signature, value: &T) -> Result<Vec<u8>>
+  where T: Serialize + ?Sized,
+{
+  let mut vec = Vec::new();
+  to_writer(&mut vec, signature, value)?;
+  Ok(vec)
 }
 
 /// Реализует метод, возвращающий ошибку при попытке сериализовать значение, с описанием
