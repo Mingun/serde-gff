@@ -5,7 +5,50 @@ use serde::ser::{self, Impossible, Serialize};
 
 use Label;
 use error::{Error, Result};
-use raw::{Struct, Field};
+use index::LabelIndex;
+use value::SimpleValueRef;
+
+/// Вспомогательная структура, описывающая индекс структуры, для типобезопасности
+#[derive(Debug, Copy, Clone)]
+struct StructIndex(usize);
+
+/// Вспомогательная структура, описывающая индекс списка полей структуры, для типобезопасности.
+/// Любая GFF структура, имеющая более двух полей, ссылается по такому индексу на список с
+/// перечислением имеющихся у нее полей
+#[derive(Debug, Copy, Clone)]
+struct FieldListIndex(usize);
+
+/// Вспомогательная структура, описывающая индекс списка элементов GFF списка, для типобезопасности
+#[derive(Debug, Copy, Clone)]
+struct ListIndex(usize);
+
+/// Промежуточное представление сериализуемых структур. Содержит данные, которые после
+/// небольшого преобразования, возможного только после окончания сериализации, могут
+/// быть записаны в файл
+#[derive(Debug)]
+enum Struct {
+  /// Структура без полей
+  NoFields,
+  /// Структура, состоящая только из одного поля, содержит индекс этого поля
+  OneField(usize),
+  /// Структура, состоящая из двух и более полей. Содержит индекс списка и количество полей
+  MultiField { list: FieldListIndex, fields: u32 }
+}
+
+/// Промежуточное представление сериализуемого поля структуры. Содержит данные, которые после
+/// небольшого преобразования, возможного только после окончания сериализации, могут
+/// быть записаны в файл
+#[derive(Debug)]
+enum Field {
+  /// Поле, представленное значением без внутренней структуры. Содержит метку поля и его значение
+  Simple { label: LabelIndex, value: SimpleValueRef },
+  /// Поле, представленное значением с внутренней структурой. Содержит метку поля и индекс
+  /// промежуточного представления структуры в массиве [`structs`](struct.Serializer.html#field.structs)
+  Struct { label: LabelIndex, struct_: StructIndex },
+  /// Поле, представленное списком значений. Содержит метку поля и индекс списка в массиве
+  /// [`list_indices`](struct.Serializer.html#field.list_indices)
+  List   { label: LabelIndex, list: ListIndex },
+}
 
 /// Структура для сериализации значения Rust в Bioware GFF.
 ///
@@ -29,6 +72,60 @@ pub struct Serializer {
   /// массива описывает набор структур, содержащихся в списке. Общее количество полей-списков
   /// равно размеру массива.
   list_indices: Vec<Vec<u32>>,
+}
+
+impl Serializer {
+  /// Добавляет в список известных названий полей для сериализации указанное и возвращает
+  /// его индекс в этом списке. Если такое поле уже имеется в индексе, не добавляет его
+  /// повторно.
+  ///
+  /// В случае, если метка содержит более 16 байт в UTF-8 представлении, метод завершается
+  /// с ошибкой.
+  fn add_label(&mut self, label: &str) -> Result<LabelIndex> {
+    let label = label.parse()?;
+    self.labels.insert(label);
+    // Мы только что вставили значение, ошибка может быть только в случае переполнения, что вряд ли случится
+    let (index, _) = self.labels.get_full(&label).unwrap();
+    Ok(LabelIndex(index as u32))
+  }
+  /// Добавляет в список структур новую структуру с указанным количеством полей.
+  /// Корректная ссылка на данные еще не заполнена, ее нужно будет скорректировать
+  /// после того, как содержимое структуры будет записано
+  ///
+  /// # Параметры
+  /// - `fields`: Количество полей в структуре
+  ///
+  /// Возвращает пару индексов: добавленной структуры и списка с полями структуры,
+  /// если полей несколько
+  fn add_struct(&mut self, fields: usize) -> (StructIndex, FieldListIndex) {
+    let index = StructIndex(self.structs.len());
+    let list  = FieldListIndex(self.field_indices.len());
+
+    match fields {
+      0 => self.structs.push(Struct::NoFields),
+      // Для структуры с одним полем записываем placeholder, он будет перезаписан после записи поля
+      1 => self.structs.push(Struct::OneField(0)),
+      _ => {
+        self.field_indices.push(Vec::with_capacity(fields));
+        self.structs.push(Struct::MultiField { list, fields: fields as u32 })
+      }
+    }
+    (index, list)
+  }
+  /// Добавляет в список списков индексов с элементами новый элемент на указанное
+  /// количество элементов и заполняет тип поля.
+  ///
+  /// # Параметры
+  /// - `field_index`: индекс поля, которому нужно обновить тип
+  /// - `len`: длина списка элементов, хранящемся в этом поле
+  ///
+  /// Возвращает индекс списка, в который нужно добавлять элементы в процессе их сериализации
+  fn add_list(&mut self, label: LabelIndex, len: usize) -> ListIndex {
+    let list = ListIndex(self.list_indices.len());
+    self.list_indices.push(Vec::with_capacity(len));
+    self.fields.push(Field::List { label, list });
+    list
+  }
 }
 
 /// Реализует метод, возвращающий ошибку при попытке сериализовать значение, с описанием
