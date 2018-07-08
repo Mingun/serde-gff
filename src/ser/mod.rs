@@ -3,7 +3,7 @@
 use std::io::Write;
 use byteorder::{LE, WriteBytesExt};
 use indexmap::IndexSet;
-use serde::ser::{self, Impossible, Serialize, SerializeStruct};
+use serde::ser::{self, Impossible, Serialize, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct};
 
 use Label;
 use error::{Error, Result};
@@ -355,7 +355,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   type Ok = ();
   type Error = Error;
 
-  type SerializeSeq = Impossible<Self::Ok, Self::Error>;
+  type SerializeSeq = ListSerializer<'a>;
   type SerializeTuple = Impossible<Self::Ok, Self::Error>;
   type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
   type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
@@ -408,10 +408,16 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     value.serialize(self)
   }
   fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
-    unimplemented!("`serialize_tuple(len: {})`", len);
+    Err(Error::Serialize(format!(
+      "`serialize_tuple(len: {})` can't be implemented in GFF format. Wrap value to the struct and serialize struct",
+      len
+    )))
   }
   fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
-    unimplemented!("`serialize_tuple_struct(name: {}, len: {})`", name, len);
+    Err(Error::Serialize(format!(
+      "`serialize_tuple_struct(name: {}, len: {})` can't be implemented in GFF format. Wrap value to the struct and serialize struct",
+      name, len
+    )))
   }
   fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
     let (struct_index, fields_index) = self.add_struct(len);
@@ -521,9 +527,9 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   type Ok = ();
   type Error = Error;
 
-  type SerializeSeq = Impossible<Self::Ok, Self::Error>;
-  type SerializeTuple = Impossible<Self::Ok, Self::Error>;
-  type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
+  type SerializeSeq = ListSerializer<'a>;
+  type SerializeTuple = Self::SerializeSeq;
+  type SerializeTupleStruct = Self::SerializeSeq;
   type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
   type SerializeMap = Impossible<Self::Ok, Self::Error>;
   type SerializeStruct = StructSerializer<'a>;
@@ -586,11 +592,14 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   {
     value.serialize(self)
   }
+  #[inline]
   fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
-    unimplemented!("`serialize_tuple(len: {})`", len);
+    let list_index = self.ser.add_list(self.label, len);
+    Ok(ListSerializer { ser: self.ser, list_index })
   }
-  fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
-    unimplemented!("`serialize_tuple_struct(name: {}, len: {})`", name, len);
+  #[inline]
+  fn serialize_tuple_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct> {
+    self.serialize_tuple(len)
   }
   #[inline]
   fn serialize_struct(mut self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
@@ -600,8 +609,9 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   //-----------------------------------------------------------------------------------------------
   // Сериализация последовательностей и отображений
   //-----------------------------------------------------------------------------------------------
+  #[inline]
   fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
-    unimplemented!("`serialize_seq(len: {:?})`", len);
+    self.serialize_tuple(len.unwrap_or(0))
   }
   fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
     unimplemented!("`serialize_map(len: {:?})`", len);
@@ -670,6 +680,63 @@ impl<'a> SerializeStruct for StructSerializer<'a> {
 
   #[inline]
   fn end(self) -> Result<Self::Ok> { Ok(()) }
+}
+
+/// Сериализует все поля списка или кортежа, заполняя массив с индексами элементов списка
+pub struct ListSerializer<'a> {
+  /// Хранилище записываемых данных
+  ser: &'a mut Serializer,
+  /// Индекс в массиве `ser.list_indices`, определяющий заполняемый данным сериализатором
+  /// список с индексами структур, составляющих элементы списка.
+  list_index: ListIndex,
+}
+
+impl<'a> SerializeSeq for ListSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_element<T>(&mut self, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    let index = self.ser.structs.len() as u32;
+    {
+      let list = &mut self.ser.list_indices[self.list_index.0];
+      list.push(index);
+    }
+    value.serialize(&mut *self.ser)
+  }
+
+  #[inline]
+  fn end(self) -> Result<()> { Ok(()) }
+}
+
+impl<'a> SerializeTuple for ListSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_element<T>(&mut self, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    <Self as SerializeSeq>::serialize_element(self, value)
+  }
+  #[inline]
+  fn end(self) -> Result<()> { <Self as SerializeSeq>::end(self) }
+}
+
+impl<'a> SerializeTupleStruct for ListSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_field<T>(&mut self, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    <Self as SerializeSeq>::serialize_element(self, value)
+  }
+  #[inline]
+  fn end(self) -> Result<()> { <Self as SerializeSeq>::end(self) }
 }
 
 #[cfg(test)]
