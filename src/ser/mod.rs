@@ -1038,6 +1038,249 @@ mod tests {
     );
   }
 
+  /// Создает тесты сериализации перечислений, для случаев, работающих одинаково на верхнем
+  /// уровне, и как поле структуры
+  macro_rules! enum_tests {
+    ($mode:tt) => (
+      #[derive(Serialize, Copy, Clone)]
+      struct Value {
+        value: u32,
+      }
+      /// Тестирует запись перечислений со значениями разных видов
+      #[test]
+      fn test_enum_externally_tagged() {
+        #[derive(Serialize)]
+        enum E {
+          Unit,
+          Newtype1(u32),
+          Newtype2(Value),
+          Tuple1(u32, u32),
+          Tuple2(Value, Value),
+          Struct { value: u32 },
+        }
+        #[derive(Serialize)]
+        #[allow(non_snake_case)]
+        struct Newtype1 {
+          Newtype1: u32,
+        }
+        #[derive(Serialize)]
+        #[allow(non_snake_case)]
+        struct Newtype2 {
+          Newtype2: Value,
+        }
+        #[derive(Serialize)]
+        #[allow(non_snake_case)]
+        struct Tuple2 {
+          Tuple2: [Value; 2],
+        }
+        #[derive(Serialize)]
+        #[allow(non_snake_case)]
+        struct Struct {
+          Struct: Value,
+        }
+
+        let value = Value { value: 42 };
+
+        enum_tests!(externally $mode E);
+
+        let n = E::Newtype1(1);
+        let expected = to_vec(Newtype1 { Newtype1: 1 });
+        assert_eq!(to_vec(n), expected);
+
+        let n = E::Newtype2(value);
+        let expected = to_vec(Newtype2 { Newtype2: value });
+        assert_eq!(to_vec(n), expected);
+
+        let t = E::Tuple1(1, 2);
+        // Кортеж сериализуется, как последовательность, а последовательности должны
+        // состоять из элементов-структур
+        assert!(is_err(t));
+
+        let t = E::Tuple2(value, value);
+        let expected = to_vec(Tuple2 { Tuple2: [value, value] });
+        assert_eq!(to_vec(t), expected);
+
+        let s = E::Struct { value: 42 };
+        let expected = to_vec(Struct { Struct: value });
+        assert_eq!(to_vec(s), expected);
+      }
+
+      /// Тестирует запись перечислений со значениями разных видов при записи тега,
+      /// определяющего вариант перечисления, в качестве одного из поля данных, на
+      /// одном уровне с другими полями
+      #[test]
+      fn test_enum_internally_tagged() {
+        #[derive(Serialize)]
+        #[serde(tag = "tag")]
+        enum E {
+          Unit,
+          Newtype1(u32),
+          Newtype2(Value),
+          // serde не умеет сериализовать кортежи в данном режиме
+          Struct { value: u32 },
+        }
+        /// Значение Unit перечисления должно сериализоваться также, как эта структура
+        #[derive(Serialize)]
+        struct Unit {
+          tag: &'static str,
+        }
+        /// Значения Newtype2 и Struct перечисления должны сериализоваться также, как эта структура
+        #[derive(Serialize)]
+        struct Struct {
+          tag: &'static str,
+          value: u32,
+        }
+
+        let u = E::Unit;
+        let expected = to_vec(Unit { tag: "Unit" });
+        assert_eq!(to_vec(u), expected);
+
+        // serde умеет сериализовать только структуры и карты внутри newtype
+        let n = E::Newtype1(1);
+        assert!(is_err(n));
+
+        let n = E::Newtype2(Value { value: 42 });
+        let expected = to_vec(Struct { tag: "Newtype2", value: 42 });
+        assert_eq!(to_vec(n), expected);
+
+        let s = E::Struct { value: 1 };
+        let expected = to_vec(Struct { tag: "Struct", value: 1 });
+        assert_eq!(to_vec(s), expected);
+      }
+
+      /// Тестирует запись перечислений со значениями разных видов
+      #[test]
+      fn test_enum_adjacently_tagged() {
+        #[derive(Serialize)]
+        #[serde(tag = "tag", content = "content")]
+        enum E {
+          Unit,
+          Newtype1(u32),
+          Newtype2(Value),
+          Tuple1(u32, u32),
+          Tuple2(Value, Value),
+          Struct { value: u32 },
+        }
+        /// Значение Unit перечисления должно сериализоваться также, как эта структура
+        #[derive(Serialize)]
+        struct Unit {
+          tag: &'static str,
+        }
+        /// Значение Newtype1 перечисления должно сериализоваться также, как эта структура
+        #[derive(Serialize)]
+        struct Newtype {
+          tag: &'static str,
+          content: u32,
+        }
+        /// Значение Tuple2 перечисления должно сериализоваться также, как эта структура
+        #[derive(Serialize)]
+        struct Tuple {
+          tag: &'static str,
+          content: (Value, Value),
+        }
+        /// Значения Struct и Newtype2 перечисления должны сериализоваться также, как эта структура
+        #[derive(Serialize)]
+        struct Struct {
+          tag: &'static str,
+          content: Value,
+        }
+
+        let value = Value { value: 42 };
+
+        let u = E::Unit;
+        let expected = to_vec(Unit { tag: "Unit" });
+        assert_eq!(to_vec(u), expected);
+
+        let n = E::Newtype1(1);
+        let expected = to_vec(Newtype { tag: "Newtype1", content: 1 });
+        assert_eq!(to_vec(n), expected);
+
+        let n = E::Newtype2(value);
+        let expected = to_vec(Struct { tag: "Newtype2", content: value });
+        assert_eq!(to_vec(n), expected);
+
+        // GFF умеет сериализовать только структуры в кортежах,
+        let t = E::Tuple1(1, 2);
+        assert!(is_err(t));
+
+        let t = E::Tuple2(value, value);
+        let expected = to_vec(Tuple { tag: "Tuple2", content: (value, value) });
+        assert_eq!(to_vec(t), expected);
+
+        let s = E::Struct { value: 42 };
+        let expected = to_vec(Struct { tag: "Struct", content: value });
+        assert_eq!(to_vec(s), expected);
+      }
+
+      /// Тестирует запись перечислений со значениями разных видов при из записи без тега
+      #[test]
+      fn test_enum_untagged() {
+        #[derive(Serialize)]
+        #[serde(untagged)]
+        enum E {
+          Unit,
+          Newtype1(u32),
+          Newtype2(Value),
+          Tuple1(u32, u32),
+          Tuple2(Value, Value),
+          Struct { value: u32 },
+        }
+        /// Значения Newtype2 и Struct перечисления должны сериализоваться также, как эта структура
+        #[derive(Serialize, Copy, Clone)]
+        struct Value { value: u32 };
+
+        let value = Value { value: 42 };
+
+        let u = E::Unit;
+        let expected = ();
+        assert_eq!(to_vec(u), to_vec(expected));
+
+        let n = E::Newtype2(value);
+        assert_eq!(to_vec(n), to_vec(value));
+
+        // GFF умеет сериализовать только структуры в кортежах,
+        // кроме того, сериализация кортежа на верхнем уровне невозможна
+        let t = E::Tuple1(1, 2);
+        assert!(is_err(t));
+
+        enum_tests!(untagged $mode E, value);
+
+        let s = E::Struct { value: 1 };
+        let expected = Value { value: 1 };
+        assert_eq!(to_vec(s), to_vec(expected));
+      }
+    );
+
+    (externally toplevel $E:ident) => (
+      // Сериализация unit-варианта на верхнем уровне невозможна
+      let u = $E::Unit;
+      assert!(is_err(u));
+    );
+    (externally as_field $E:ident) => (
+      let u = $E::Unit;
+      let expected = to_vec("Unit");
+      assert_eq!(to_vec(u), expected);
+    );
+
+    (untagged toplevel $E:ident, $value:expr) => (
+      // GFF умеет сериализовать только структуры на верхнем уровне
+      let n = E::Newtype1(1);
+      assert!(is_err(n));
+
+      // Сериализация кортежа на верхнем уровне невозможна
+      let t = $E::Tuple2($value, $value);
+      assert!(is_err(t));
+    );
+    (untagged as_field $E:ident, $value:expr) => (
+      let n = E::Newtype1(1);
+      assert_eq!(to_vec(n), to_vec(1u32));
+
+      let t = $E::Tuple2($value, $value);
+      let expected = ($value, $value);
+      assert_eq!(to_vec(t), to_vec(expected));
+    );
+  }
+
   mod toplevel {
     //! Тестирует сериализацию различных значений, когда они не включены ни в какую структуру
     use super::*;
@@ -1432,6 +1675,7 @@ mod tests {
       assert!(is_err(array));
     }
     map_tests!();
+    enum_tests!(toplevel);
   }
 
   mod as_field {
@@ -1988,5 +2232,6 @@ mod tests {
       assert_eq!(to_vec_((*b"GFF ").into(), &list).expect("Serialization fail"), expected);
     }
     map_tests!();
+    enum_tests!(as_field);
   }
 }
