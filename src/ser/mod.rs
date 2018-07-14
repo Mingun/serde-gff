@@ -3,7 +3,7 @@
 use std::io::Write;
 use byteorder::{LE, WriteBytesExt};
 use indexmap::IndexSet;
-use serde::ser::{self, Impossible, Serialize, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct};
+use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct};
 
 use Label;
 use error::{Error, Result};
@@ -359,7 +359,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   type SerializeTuple = Impossible<Self::Ok, Self::Error>;
   type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
   type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
-  type SerializeMap = Impossible<Self::Ok, Self::Error>;
+  type SerializeMap = MapSerializer<'a>;
   type SerializeStruct = StructSerializer<'a>;
   type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
 
@@ -428,7 +428,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   //-----------------------------------------------------------------------------------------------
   unsupported!(serialize_seq(Option<usize>) -> Self::SerializeSeq);
   fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
-    unimplemented!("`serialize_map(len: {:?})`", len);
+    let ser = self.serialize_struct("", len.unwrap_or(0))?;
+    Ok(MapSerializer { ser, label: None })
   }
   //-----------------------------------------------------------------------------------------------
   // Сериализация компонентов перечисления
@@ -531,7 +532,7 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   type SerializeTuple = Self::SerializeSeq;
   type SerializeTupleStruct = Self::SerializeSeq;
   type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
-  type SerializeMap = Impossible<Self::Ok, Self::Error>;
+  type SerializeMap = MapSerializer<'a>;
   type SerializeStruct = StructSerializer<'a>;
   type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
 
@@ -613,8 +614,10 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
     self.serialize_tuple(len.unwrap_or(0))
   }
+  #[inline]
   fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
-    unimplemented!("`serialize_map(len: {:?})`", len);
+    let ser = self.serialize_struct("", len.unwrap_or(0))?;
+    Ok(MapSerializer { ser, label: None })
   }
   //-----------------------------------------------------------------------------------------------
   // Сериализация компонентов перечисления
@@ -647,18 +650,14 @@ pub struct StructSerializer<'a> {
   /// индексы полей по мере их сериализации
   fields_index: FieldListIndex,
 }
-impl<'a> SerializeStruct for StructSerializer<'a> {
-  type Ok = ();
-  type Error = Error;
-
+impl<'a> StructSerializer<'a> {
+  /// Сериализует значение, обновляя поле с указанным индексом
   #[inline]
-  fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<Self::Ok>
+  fn serialize_value<T>(&mut self, label: LabelIndex, value: &T) -> Result<()>
     where T: ?Sized + Serialize,
   {
     use self::Struct::*;
 
-    // Добавляем запись о метке
-    let label = self.ser.add_label(key)?;
     let index = self.ser.fields.len();
     value.serialize(FieldSerializer { ser: self.ser, label })?;
     // Обновляем ссылки из записи о структуре
@@ -676,6 +675,19 @@ impl<'a> SerializeStruct for StructSerializer<'a> {
       },
     };
     Ok(())
+  }
+}
+impl<'a> SerializeStruct for StructSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    // Добавляем запись о метке
+    let label = self.ser.add_label(key)?;
+    self.serialize_value(label, value)
   }
 
   #[inline]
@@ -737,6 +749,113 @@ impl<'a> SerializeTupleStruct for ListSerializer<'a> {
   }
   #[inline]
   fn end(self) -> Result<()> { <Self as SerializeSeq>::end(self) }
+}
+
+/// Структура, реализующая сериализацию ключа карты. Сериализация значений делегируется
+/// вложенному `StructSerializer`-у
+pub struct MapSerializer<'a> {
+  /// Хранилище записываемых данных
+  ser: StructSerializer<'a>,
+  /// Индекс поля в массиве `ser.fields`, которое будет отражать сериализованную запись
+  label: Option<LabelIndex>,
+}
+impl<'a, 'b> ser::Serializer for &'b mut MapSerializer<'a> {
+  type Ok = LabelIndex;
+  type Error = Error;
+
+  type SerializeSeq = Impossible<Self::Ok, Self::Error>;
+  type SerializeTuple = Impossible<Self::Ok, Self::Error>;
+  type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
+  type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
+  type SerializeMap = Impossible<Self::Ok, Self::Error>;
+  type SerializeStruct = Impossible<Self::Ok, Self::Error>;
+  type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
+
+  unsupported!(serialize_i8(i8));
+  unsupported!(serialize_u8(u8));
+  unsupported!(serialize_i16(i16));
+  unsupported!(serialize_u16(u16));
+  unsupported!(serialize_i32(i32));
+  unsupported!(serialize_u32(u32));
+  unsupported!(serialize_i64(i64));
+  unsupported!(serialize_u64(u64));
+
+  unsupported!(serialize_f32(f32));
+  unsupported!(serialize_f64(f64));
+
+  unsupported!(serialize_bool(bool));
+  unsupported!(serialize_char(char));
+
+  #[inline]
+  fn serialize_str(self, value: &str) -> Result<Self::Ok> {
+    // Добавляем запись о метке
+    self.ser.ser.add_label(value)
+  }
+  unsupported!(serialize_bytes(&[u8]));
+
+  unsupported!(serialize_none());
+  fn serialize_some<T>(self, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    value.serialize(self)
+  }
+  //-----------------------------------------------------------------------------------------------
+  // Сериализация структурных элементов
+  //-----------------------------------------------------------------------------------------------
+  unsupported!(serialize_unit());
+  unsupported!(serialize_unit_struct(&'static str));
+  #[inline]
+  fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    value.serialize(self)
+  }
+  unsupported!(serialize_tuple(usize) -> Self::SerializeTuple);
+  unsupported!(serialize_tuple_struct(&'static str, usize) -> Self::SerializeTupleStruct);
+  unsupported!(serialize_struct(&'static str, usize) -> Self::SerializeStruct);
+  //-----------------------------------------------------------------------------------------------
+  // Сериализация последовательностей и отображений
+  //-----------------------------------------------------------------------------------------------
+  unsupported!(serialize_seq(Option<usize>) -> Self::SerializeSeq);
+  unsupported!(serialize_map(Option<usize>) -> Self::SerializeMap);
+  //-----------------------------------------------------------------------------------------------
+  // Сериализация компонентов перечисления
+  //-----------------------------------------------------------------------------------------------
+  #[inline]
+  fn serialize_unit_variant(self, _name: &'static str, _index: u32, variant: &'static str) -> Result<Self::Ok> {
+    self.serialize_str(variant)
+  }
+  fn serialize_newtype_variant<T>(self, name: &'static str, index: u32, variant: &'static str, _value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    unimplemented!("`serialize_newtype_variant(name: {}, index: {}, variant: {})`", name, index, variant);
+  }
+  unsupported!(serialize_tuple_variant(&'static str, u32, &'static str, usize) -> Self::SerializeTupleVariant);
+  unsupported!(serialize_struct_variant(&'static str, u32, &'static str, usize) -> Self::SerializeStructVariant);
+}
+
+impl<'a> SerializeMap for MapSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_key<T>(&mut self, key: &T) -> Result<()>
+    where T: ?Sized + Serialize,
+  {
+    self.label = Some(key.serialize(&mut *self)?);
+    Ok(())
+  }
+
+  #[inline]
+  fn serialize_value<T>(&mut self, value: &T) -> Result<()>
+    where T: ?Sized + Serialize,
+  {
+    let error = || Error::Serialize("`SerializeMap::serialize_key` must be called before `SerializeMap::serialize_value`".into());
+    self.ser.serialize_value(self.label.ok_or_else(error)?, value)
+  }
+
+  #[inline]
+  fn end(self) -> Result<Self::Ok> { Ok(()) }
 }
 
 #[cfg(test)]
