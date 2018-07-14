@@ -755,6 +755,49 @@ mod tests {
       ]
     });
   }
+  /// Формирует байтовый массив, соответствующий сериализованной структуре с одним полем
+  /// `value` со списком элементов заданного типа, который хранится в записи о самом поле.
+  macro_rules! list_wrapped {
+    ($($type:expr; $b1:expr, $b2:expr, $b3:expr, $b4:expr;)*) => ({
+      let cnt = len!($($type)*) as u8;
+      let mut i = 0u8;// Номер поля структуры
+      let mut j = 0u8;// Номер структуры в списке
+      let len = (1 + len!($($type)*) as u8) * 4;
+
+      vec![
+        // Заголовок
+        b'G',b'F',b'F',b' ',// Тип файла
+        b'V',b'3',b'.',b'2',// Версия
+        56,0,0,0,   1 + cnt,0,0,0,// Начальное смещение и количество структур (cnt + 1 - корневая)
+        68 + cnt*4*3  ,0,0,0,   1 + cnt,0,0,0,// Начальное смещение и количество полей (cnt + 1 поле - по одному на каждую структуру)
+        80 + cnt*4*3*2,0,0,0,   1,0,0,0,// Начальное смещение и количество меток (1 метка - у всех структур поля называются одинаково)
+        96 + cnt*4*3*2,0,0,0,   0,0,0,0,// Начальное смещение и количество байт данных (байт данных нет)
+        96 + cnt*4*3*2,0,0,0,   0,0,0,0,// Начальное смещение и количество байт в списках полей (списков нет)
+        96 + cnt*4*3*2,0,0,0, len,0,0,0,// Начальное смещение и количество байт в списках структур (x списков)
+
+        // Структуры
+        // тег     ссылка      кол-во
+        //        на данные    полей
+        0,0,0,0,   0,0,0,0,   1,0,0,0,// Структура 0 (тег 0, 1 поле)
+        $(
+          0,0,0,0,  replace_expr!($type {i+=1; i}),0,0,0,  1,0,0,0,// Структура i (тег 0, 1 поле)
+        )*
+
+        // Поля
+        // тип      метка     значение
+        15,0,0,0,  0,0,0,0,   0,0,0,0,// Поле структуры 0 (ссылаются на метку 1 и список 1)
+        $(
+          $type,0,0,0,  0,0,0,0,  $b1,$b2,$b3,$b4,// Поля (ссылаются на метку 1)
+        )*
+
+        // Метки
+        b'v',b'a',b'l',b'u',b'e',0,0,0,0,0,0,0,0,0,0,0,// Метка 1
+
+        // Ссылки на элементы списков
+        cnt,0,0,0, $(replace_expr!($type {j+=1; j}),0,0,0,)*// Список 1
+      ]
+    });
+  }
 
   mod toplevel {
     //! Тестирует сериализацию различных значений, когда они не включены ни в какую структуру
@@ -1079,6 +1122,41 @@ mod tests {
       ];
       assert_eq!(to_vec(test), expected);
     }
+
+    /// Тестирует запись кортежа из значений разных типов, не все из которых являются структурами
+    #[test]
+    fn test_tuple_with_non_struct_item() {
+      #[derive(Serialize, Clone, Copy)]
+      struct Item { value: u32 }
+      #[derive(Serialize)]
+      struct Tuple1(u32, f32);
+      #[derive(Serialize)]
+      struct Tuple2(Item, f32);
+
+      let item = Item { value: 42 };
+
+      assert!(is_err((42u32, 42f32)));
+      assert!(is_err((item, 42f32)));
+      assert!(is_err(Tuple1(42, 42.0)));
+      assert!(is_err(Tuple2(item, 42.0)));
+    }
+
+    /// Тестирует запись кортежа из значений структур разных типов
+    #[test]
+    fn test_tuple_with_struct_item() {
+      #[derive(Serialize, Clone, Copy)]
+      struct Item1 { value: u32 }
+      #[derive(Serialize, Clone, Copy)]
+      struct Item2 { value: f32 }
+      #[derive(Serialize)]
+      struct Tuple(Item1, Item2);
+
+      let item1 = Item1 { value: 42 };
+      let item2 = Item2 { value: 42.0 };
+
+      assert!(is_err((item1, item2)));
+      assert!(is_err(Tuple(item1, item2)));
+    }
   }
 
   mod as_field {
@@ -1097,6 +1175,13 @@ mod tests {
         value: T
       }
       to_vec_((*b"GFF ").into(), &Storage { value })
+    }
+
+    #[inline]
+    fn is_err<T>(value: T) -> bool
+      where T: Serialize,
+    {
+      to_result(value).is_err()
     }
 
     /// Сериализует значение, оборачивая его в структуру, т.к. формат не поддерживает на
@@ -1427,6 +1512,45 @@ mod tests {
         2,0,0,0,   3,0,0,0,           // Список 2 (для Nested), поля 2 и 3
       ];
       assert_eq!(to_vec_((*b"GFF ").into(), &test).expect("Serialization fail"), expected);
+    }
+
+    /// Тестирует запись кортежа из значений разных типов, не все из которых являются структурами
+    #[test]
+    fn test_tuple_with_non_struct_item() {
+      #[derive(Serialize, Clone, Copy)]
+      struct Item { value: u32 }
+      #[derive(Serialize)]
+      struct Tuple1(u32, f32);
+      #[derive(Serialize)]
+      struct Tuple2(Item, f32);
+
+      let item = Item { value: 42 };
+
+      assert!(is_err((42u32, 42f32)));
+      assert!(is_err((item, 42f32)));
+      assert!(is_err(Tuple1(42, 42.0)));
+      assert!(is_err(Tuple2(item, 42.0)));
+    }
+
+    /// Тестирует запись кортежа из значений структур разных типов
+    #[test]
+    fn test_tuple_with_struct_item() {
+      #[derive(Serialize, Clone, Copy)]
+      struct Item1 { value: u32 }
+      #[derive(Serialize, Clone, Copy)]
+      struct Item2 { value: f32 }
+      #[derive(Serialize)]
+      struct Tuple(Item1, Item2);
+
+      let item1 = Item1 { value: 42 };
+      let item2 = Item2 { value: 42.0 };
+
+      let expected = list_wrapped![
+        4; 42,0,0,0;
+        8; 0,0,0x28,0x42;
+      ];
+      assert_eq!(to_vec((item1, item2)), expected);
+      assert_eq!(to_vec(Tuple(item1, item2)), expected);
     }
   }
 }
