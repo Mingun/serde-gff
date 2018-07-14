@@ -743,6 +743,7 @@ impl<'a> SerializeTupleStruct for ListSerializer<'a> {
 mod tests {
   extern crate serde_bytes;
 
+  use std::collections::BTreeMap;
   use serde::ser::Serialize;
   use super::to_vec as to_vec_;
   use self::serde_bytes::{Bytes, ByteBuf};
@@ -864,6 +865,58 @@ mod tests {
         cnt,0,0,0, $(replace_expr!($type {j+=1; j}),0,0,0,)*// Список 1
       ]
     });
+  }
+
+  /// Создает отображение ключей на значения
+  macro_rules! map {
+    () => (
+      BTreeMap::new()
+    );
+    ($($k:expr => $v:expr),+) => (
+      map!($($k => $v,)*)
+    );
+    ($($k:expr => $v:expr,)+) => (
+      {
+        let mut m = BTreeMap::new();
+        $(
+          m.insert($k, $v);
+        )+
+        m
+      }
+    );
+  }
+
+  macro_rules! map_tests {
+    () => (
+      /// Тестирует запись отображения строк на значения
+      #[test]
+      fn test_map() {
+        // Пустая карта аналогична пустой или Unit-структуре
+        let empty: BTreeMap<String, ()> = map![];
+        assert_eq!(to_vec(empty), to_vec(()));
+
+        #[derive(Serialize)]
+        struct S {
+          field1: u32,
+          field2: u32,
+        }
+
+        // Карта с полями аналогична структуре
+        let map = map![
+          "field1".to_string() => 1u32,
+          "field2".to_string() => 2u32,
+        ];
+        assert_eq!(to_vec(map), to_vec(S { field1: 1, field2: 2 }));
+
+        // карта с не строковыми ключами не может быть сериализована
+        // TODO: Ослабить ограничение до типажа AsStr<str>
+        let map = map![
+          1u32 => 1u32,
+          2u32 => 2u32,
+        ];
+        assert!(is_err(map));
+      }
+    );
   }
 
   mod toplevel {
@@ -1259,6 +1312,7 @@ mod tests {
       assert!(is_err(&array[..]));
       assert!(is_err(array));
     }
+    map_tests!();
   }
 
   mod as_field {
@@ -1814,5 +1868,6 @@ mod tests {
       ];
       assert_eq!(to_vec_((*b"GFF ").into(), &list).expect("Serialization fail"), expected);
     }
+    map_tests!();
   }
 }
