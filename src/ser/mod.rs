@@ -3,7 +3,8 @@
 use std::io::Write;
 use byteorder::{LE, WriteBytesExt};
 use indexmap::IndexSet;
-use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct};
+use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple,
+                 SerializeTupleStruct, SerializeTupleVariant};
 
 use Label;
 use error::{Error, Result};
@@ -199,6 +200,17 @@ impl Serializer {
     self.fields.push(Field::List { label, list });
     list
   }
+  fn add_tuple_variant(&mut self, struct_index: StructIndex, variant: &'static str, len: usize) -> Result<ListSerializer> {
+    // Обновляем ссылки из записи о структуре
+    if let Struct::OneField(ref mut index) = self.structs[struct_index.0] {
+      *index = self.fields.len();
+    }
+    // Добавляем запись о метке
+    let label = self.add_label(variant)?;
+    // Добавляем список элементов указанной длины
+    let list_index = self.add_list(label, len);
+    Ok(ListSerializer { ser: self, list_index })
+  }
   /// Создает заголовок файла на основе его содержания
   fn make_header(&self, signature: Signature, version: Version) -> Header {
     struct Builder {
@@ -358,7 +370,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   type SerializeSeq = ListSerializer<'a>;
   type SerializeTuple = Impossible<Self::Ok, Self::Error>;
   type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
-  type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
+  type SerializeTupleVariant = Self::SerializeSeq;
   type SerializeMap = MapSerializer<'a>;
   type SerializeStruct = StructSerializer<'a>;
   type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
@@ -451,8 +463,11 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     ser.serialize_field(variant, value)?;
     ser.end()
   }
-  fn serialize_tuple_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
-    unimplemented!("`serialize_tuple_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
+  #[inline]
+  fn serialize_tuple_variant(self, _name: &'static str, _index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
+    // Добавляем запись о структуре с одним полем
+    let (struct_index, _) = self.add_struct(1);
+    self.add_tuple_variant(struct_index, variant, len)
   }
   fn serialize_struct_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
     unimplemented!("`serialize_struct_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
@@ -540,7 +555,7 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   type SerializeSeq = ListSerializer<'a>;
   type SerializeTuple = Self::SerializeSeq;
   type SerializeTupleStruct = Self::SerializeSeq;
-  type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
+  type SerializeTupleVariant = Self::SerializeSeq;
   type SerializeMap = MapSerializer<'a>;
   type SerializeStruct = StructSerializer<'a>;
   type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
@@ -644,8 +659,11 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
     ser.serialize_field(variant, value)?;
     ser.end()
   }
-  fn serialize_tuple_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
-    unimplemented!("`serialize_tuple_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
+  #[inline]
+  fn serialize_tuple_variant(mut self, _name: &'static str, _index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
+    // Добавляем запись о структуре с одним полем
+    let (struct_index, _) = self.add_struct(1)?;
+    self.ser.add_tuple_variant(struct_index, variant, len)
   }
   fn serialize_struct_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
     unimplemented!("`serialize_struct_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
@@ -752,6 +770,20 @@ impl<'a> SerializeTuple for ListSerializer<'a> {
 }
 
 impl<'a> SerializeTupleStruct for ListSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_field<T>(&mut self, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    <Self as SerializeSeq>::serialize_element(self, value)
+  }
+  #[inline]
+  fn end(self) -> Result<()> { <Self as SerializeSeq>::end(self) }
+}
+
+impl<'a> SerializeTupleVariant for ListSerializer<'a> {
   type Ok = ();
   type Error = Error;
 
