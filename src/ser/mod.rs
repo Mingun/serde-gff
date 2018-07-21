@@ -3,8 +3,9 @@
 use std::io::Write;
 use byteorder::{LE, WriteBytesExt};
 use indexmap::IndexSet;
-use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple,
-                 SerializeTupleStruct, SerializeTupleVariant};
+use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq,
+                 SerializeStruct, SerializeTuple, SerializeTupleStruct,
+                 SerializeTupleVariant, SerializeStructVariant};
 
 use Label;
 use error::{Error, Result};
@@ -211,6 +212,20 @@ impl Serializer {
     let list_index = self.add_list(label, len);
     Ok(ListSerializer { ser: self, list_index })
   }
+  fn add_struct_variant(&mut self, struct_index: StructIndex, variant: &'static str, len: usize) -> Result<StructSerializer> {
+    // Обновляем ссылки из записи о структуре
+    if let Struct::OneField(ref mut index) = self.structs[struct_index.0] {
+      *index = self.fields.len();
+    }
+
+    let (struct_index, fields_index) = self.add_struct(len);
+
+    // Добавляем запись о метке
+    let label = self.add_label(variant)?;
+    self.fields.push(Field::Struct { label, struct_: struct_index });
+
+    Ok(StructSerializer { ser: self, struct_index, fields_index })
+  }
   /// Создает заголовок файла на основе его содержания
   fn make_header(&self, signature: Signature, version: Version) -> Header {
     struct Builder {
@@ -373,7 +388,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   type SerializeTupleVariant = Self::SerializeSeq;
   type SerializeMap = MapSerializer<'a>;
   type SerializeStruct = StructSerializer<'a>;
-  type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
+  type SerializeStructVariant = Self::SerializeStruct;
 
   unsupported!(serialize_i8(i8));
   unsupported!(serialize_u8(u8));
@@ -460,8 +475,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     where T: ?Sized + Serialize,
   {
     let mut ser = self.serialize_struct(name, 1)?;
-    ser.serialize_field(variant, value)?;
-    ser.end()
+    SerializeStruct::serialize_field(&mut ser, variant, value)?;
+    SerializeStruct::end(ser)
   }
   #[inline]
   fn serialize_tuple_variant(self, _name: &'static str, _index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
@@ -469,8 +484,11 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     let (struct_index, _) = self.add_struct(1);
     self.add_tuple_variant(struct_index, variant, len)
   }
-  fn serialize_struct_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
-    unimplemented!("`serialize_struct_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
+  #[inline]
+  fn serialize_struct_variant(self, _name: &'static str, _index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
+    // Добавляем запись о структуре с одним полем
+    let (struct_index, _) = self.add_struct(1);
+    self.add_struct_variant(struct_index, variant, len)
   }
 }
 
@@ -558,7 +576,7 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   type SerializeTupleVariant = Self::SerializeSeq;
   type SerializeMap = MapSerializer<'a>;
   type SerializeStruct = StructSerializer<'a>;
-  type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
+  type SerializeStructVariant = Self::SerializeStruct;
 
   primitive!(serialize_u8 , u8 , Byte);
   primitive!(serialize_i8 , i8 , Char);
@@ -656,8 +674,8 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
     where T: ?Sized + Serialize,
   {
     let mut ser = self.serialize_struct(name, 1)?;
-    ser.serialize_field(variant, value)?;
-    ser.end()
+    SerializeStruct::serialize_field(&mut ser, variant, value)?;
+    SerializeStruct::end(ser)
   }
   #[inline]
   fn serialize_tuple_variant(mut self, _name: &'static str, _index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
@@ -665,8 +683,11 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
     let (struct_index, _) = self.add_struct(1)?;
     self.ser.add_tuple_variant(struct_index, variant, len)
   }
-  fn serialize_struct_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
-    unimplemented!("`serialize_struct_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
+  #[inline]
+  fn serialize_struct_variant(mut self, _name: &'static str, _index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant> {
+    // Добавляем запись о структуре с одним полем
+    let (struct_index, _) = self.add_struct(1)?;
+    self.ser.add_struct_variant(struct_index, variant, len)
   }
 }
 
@@ -724,6 +745,19 @@ impl<'a> SerializeStruct for StructSerializer<'a> {
 
   #[inline]
   fn end(self) -> Result<Self::Ok> { Ok(()) }
+}
+impl<'a> SerializeStructVariant for StructSerializer<'a> {
+  type Ok = ();
+  type Error = Error;
+
+  #[inline]
+  fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<Self::Ok>
+    where T: ?Sized + Serialize,
+  {
+    <Self as SerializeStruct>::serialize_field(self, key, value)
+  }
+  #[inline]
+  fn end(self) -> Result<()> { <Self as SerializeStruct>::end(self) }
 }
 
 /// Сериализует все поля списка или кортежа, заполняя массив с индексами элементов списка
