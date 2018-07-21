@@ -434,13 +434,22 @@ impl<'a> ser::Serializer for &'a mut Serializer {
   //-----------------------------------------------------------------------------------------------
   // Сериализация компонентов перечисления
   //-----------------------------------------------------------------------------------------------
+  /// Всегда возвращает ошибку сериализации `Error::Serialize`, т.к. unit-варианты перечисления
+  /// должны сериализоваться, как строки `variant`, а сериализация строк на верхнем уровне невозможна
+  #[inline]
   fn serialize_unit_variant(self, name: &'static str, index: u32, variant: &'static str) -> Result<Self::Ok> {
-    unimplemented!("`serialize_unit_variant(name: {}, index: {}, variant: {})`", name, index, variant);
+    Err(Error::Serialize(format!(
+      "`serialize_unit_variant(name: {}, index: {}, variant: {})` can't be implemented in GFF format. Wrap value to the struct and serialize struct",
+      name, index, variant
+    )))
   }
-  fn serialize_newtype_variant<T>(self, name: &'static str, index: u32, variant: &'static str, value: &T) -> Result<Self::Ok>
+  /// Сериализует `value` как структуру с одним полем с именем `variant` и значением `value`
+  fn serialize_newtype_variant<T>(self, name: &'static str, _index: u32, variant: &'static str, value: &T) -> Result<Self::Ok>
     where T: ?Sized + Serialize,
   {
-    unimplemented!("`serialize_newtype_variant(name: {}, index: {}, variant: {})`", name, index, variant);
+    let mut ser = self.serialize_struct(name, 1)?;
+    ser.serialize_field(variant, value)?;
+    ser.end()
   }
   fn serialize_tuple_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
     unimplemented!("`serialize_tuple_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
@@ -622,13 +631,18 @@ impl<'a> ser::Serializer for FieldSerializer<'a> {
   //-----------------------------------------------------------------------------------------------
   // Сериализация компонентов перечисления
   //-----------------------------------------------------------------------------------------------
-  fn serialize_unit_variant(self, name: &'static str, index: u32, variant: &'static str) -> Result<Self::Ok> {
-    unimplemented!("`serialize_unit_variant(name: {}, index: {}, variant: {})`", name, index, variant);
+  /// Сериализует вариант перечисления, как строку `variant`
+  #[inline]
+  fn serialize_unit_variant(self, _name: &'static str, _index: u32, variant: &'static str) -> Result<Self::Ok> {
+    self.serialize_str(variant)
   }
-  fn serialize_newtype_variant<T>(self, name: &'static str, index: u32, variant: &'static str, value: &T) -> Result<Self::Ok>
+  /// Сериализует `value` как структуру с одним полем с именем `variant` и значением `value`
+  fn serialize_newtype_variant<T>(self, name: &'static str, _index: u32, variant: &'static str, value: &T) -> Result<Self::Ok>
     where T: ?Sized + Serialize,
   {
-    unimplemented!("`serialize_newtype_variant(name: {}, index: {}, variant: {})`", name, index, variant);
+    let mut ser = self.serialize_struct(name, 1)?;
+    ser.serialize_field(variant, value)?;
+    ser.end()
   }
   fn serialize_tuple_variant(self, name: &'static str, index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant> {
     unimplemented!("`serialize_tuple_variant(name: {}, index: {}, variant: {}, len: {})`", name, index, variant, len);
