@@ -1,0 +1,13 @@
+[package]
+name = "serde-gff"
+version = "0.1.0"
+authors = ["Mingun <Alexander_Sergey@mail.ru>"]
+description = "https://github.com/Mingun/serde-gff"
+repository = "https://github.com/Mingun/serde-gff"
+readme = "readme.md"
+license = "MIT"
+keywords = ["serde", "gff", "serialization", "bioware", "parser"]
+categories = ["encoding", "game-engines", "parser-implementations"]
+
+[dependencies]
+byteorder = "1.2.7"
