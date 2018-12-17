@@ -1,5 +1,6 @@
 //! Реализация потокового парсера GFF файла
 
+use std::iter::FusedIterator;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::transmute;
 use byteorder::{LE, ReadBytesExt};
@@ -13,7 +14,17 @@ use index::{Index, LabelIndex, U64Index, I64Index, F64Index, StringIndex, ResRef
 use string::LocString;
 use value::SimpleValueRef;
 
-/// Хранит настройки чтения GFF файла и источник для чтения
+mod token;
+mod states;
+
+use self::states::State;
+pub use self::token::Token;
+
+/// Уникальный идентификатор типа структуры, хранимой в GFF-файле
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Tag(u32);
+
+/// Реализует потоковый (наподобие SAX) парсер GFF файла
 pub struct Parser<R: Read + Seek> {
   /// Источник данных для чтения элементов GFF-файла
   reader: R,
@@ -23,6 +34,8 @@ pub struct Parser<R: Read + Seek> {
   encoding: EncodingRef,
   /// Способ обработки ошибок декодирования строк
   trap: DecoderTrap,
+  /// Текущее состояние разбора
+  state: State,
 }
 
 impl<R: Read + Seek> Parser<R> {
@@ -46,7 +59,14 @@ impl<R: Read + Seek> Parser<R> {
   pub fn with_encoding(mut reader: R, encoding: EncodingRef, trap: DecoderTrap) -> Result<Self> {
     let header = Header::read(&mut reader)?;
 
-    Ok(Parser { header, reader, encoding, trap })
+    Ok(Parser { header, reader, encoding, trap, state: State::default() })
+  }
+  /// Возвращает следующий токен или ошибку, если данных не осталось или при их чтении возникли
+  /// проблемы.
+  pub fn next_token(&mut self) -> Result<Token> {
+    let (token, next) = self.state.clone().next(self)?;
+    self.state = next;
+    Ok(token)
   }
 //-------------------------------------------------------------------------------------------------
 // Завершение чтения комплексных данных
@@ -207,3 +227,25 @@ impl<R: Read + Seek> Parser<R> {
     Ok(value)
   }
 }
+
+impl<R: Read + Seek> Iterator for Parser<R> {
+  type Item = Token;
+
+  fn next(&mut self) -> Option<Token> {
+    if let State::Finish = self.state {
+      return None;
+    }
+    let res = self.next_token();
+    if let Err(Error::ParsingFinished) = res {
+      return None;
+    }
+    Some(res.expect("Can't read token"))
+  }
+
+  #[inline]
+  fn size_hint(&self) -> (usize, Option<usize>) {
+    (self.header.token_count(), None)
+  }
+}
+
+impl<R: Read + Seek> FusedIterator for Parser<R> {}

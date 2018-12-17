@@ -1,5 +1,6 @@
 //! Содержит описания структур заголовка GFF файла
 
+use std::cmp::max;
 use std::io::{Read, Write, Result};
 use byteorder::{LE, ReadBytesExt, WriteBytesExt};
 
@@ -119,5 +120,18 @@ impl Header {
     self.field_data.write(writer)?;
     self.field_indices.write(writer)?;
     self.list_indices.write(writer)
+  }
+  /// Возвращает нижнюю границу на количество токенов, которые может произвести
+  /// данный файл
+  #[inline]
+  pub fn token_count(&self) -> usize {
+    // Для каждой структуры - токен начала и окончания
+    // Для каждого списка - токен начала и окончания
+    let size = (self.structs.count + self.list_indices.count)*2;
+
+    // Т.к. каждое поле может быть списком или структурой, то они уже подсчитываются
+    // в списках и структурах. Поэтому минимальное количество вычисляем, как максимум
+    // из того, что нам смогут дать поля или структуры со списками
+    max(size, self.fields.count) as usize
   }
 }

@@ -23,6 +23,8 @@ pub enum Error {
     /// Значение, которое было записано в файле для данного тега
     value: u32
   },
+  /// Разбор уже завершен
+  ParsingFinished,
 }
 /// Тип результата, используемый в методах данной библиотеки
 pub type Result<T> = result::Result<T, Error>;
@@ -33,6 +35,7 @@ impl fmt::Display for Error {
       Io(ref err) => err.fmt(fmt),
       Encoding(ref msg) => msg.fmt(fmt),
       UnknownValue { tag, value } => write!(fmt, "Unknown field value (tag: {}, value: {})", tag, value),
+      ParsingFinished => write!(fmt, "Parsing finished"),
     }
   }
 }
@@ -43,6 +46,7 @@ impl error::Error for Error {
       Io(ref err) => error::Error::description(err),
       Encoding(ref msg) => msg,
       UnknownValue { .. } => "Unknown field value",
+      ParsingFinished => "Parsing finished",
     }
   }
 
