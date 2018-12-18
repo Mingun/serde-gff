@@ -1,4 +1,4 @@
-//! Реализация потокового парсера GFF файла
+//! Реализация потокового парсера GFF файла. См. описание структуры [`Parser`](struct.Parser.html)
 
 use std::iter::FusedIterator;
 use std::io::{Read, Seek, SeekFrom};
@@ -12,7 +12,7 @@ use error::{Error, Result};
 use header::Header;
 use index::{Index, LabelIndex, U64Index, I64Index, F64Index, StringIndex, ResRefIndex, LocStringIndex, BinaryIndex};
 use string::LocString;
-use value::SimpleValueRef;
+use value::{SimpleValue, SimpleValueRef};
 
 mod token;
 mod states;
@@ -24,7 +24,136 @@ pub use self::token::Token;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Tag(u32);
 
-/// Реализует потоковый (наподобие SAX) парсер GFF файла
+/// Реализует потоковый (наподобие SAX) парсер GFF файла. Парсер реализует интерфейс
+/// итератора по [токенам]. Каждый вызов метода [`next_token`] возвращает следующий токен
+/// из потока, который сразу же может быть использован для анализа или сохранен для
+/// дальнейшего использования.
+///
+/// # События разбора
+/// Парсер представляет собой pull-down парсер, т.е. для получения данных его нужно опрашивать внешним
+/// циклом (в противоположность push-down парсеру, который испускает события при разборе очередного
+/// элемента).
+///
+/// Так как GFF файл может быть представлен в XML виде, и эта структура проще для представления в тексте,
+/// то ниже показан пример файла, в котором отмечены места после которых парсер генерирует токены при
+/// разборе. В виде кода Rust описанная структура данных может быть представлена таким образом:
+///
+/// ```rust,no_run
+/// struct Struct;
+/// struct Item {
+///   double: f64,
+/// }
+/// struct Root {
+///   int: i32,
+///   struc: Struct,
+///   list: Vec<Item>,
+/// }
+/// ```
+/// XML представление:
+/// ```xml
+/// <STRUCT tag='4294967295'>[1]
+///   <FIELD label='int'[2] type='INT'>8</FIELD>[3]
+///   <FIELD label='struc'[4] type='STRUCT'>
+///     <STRUCT tag='1'>[5]
+///     </STRUCT>[6]
+///   </FIELD>
+///   <FIELD label='list'[7] type='LIST'>[8]
+///     <STRUCT tag='2'>[9]
+///       <FIELD label='double'[10] type='DOUBLE'>0.000000</FIELD>[11]
+///     </STRUCT>[12]
+///   </FIELD>[13]
+/// </STRUCT>[14]
+/// ```
+/// Токены, получаемые последовательным вызовом [`next_token`]:
+/// 1. [`RootBegin`]. Прочитано описание корневой структуры -- в этом состоянии уже известен
+///    тег типа структуры и количество полей в ней.
+/// 2. [`Label`]. Прочитан индекс метки, по этому индексу может быть прочитано значение метки
+/// 3. [`Value`]. Прочитано примитивное значение
+/// 4. [`Label`]. Прочитан индекс метки, по этому индексу может быть прочитано значение метки
+/// 5. [`StructBegin`]. Прочитано количество полей структуры и ее тег
+/// 6. [`StructEnd`]
+/// 7. [`Label`]. Прочитан индекс метки, по этому индексу может быть прочитано значение метки
+/// 8. [`ListBegin`]. Прочитано количество элементов списка
+/// 9. [`ItemBegin`]. Прочитано количество полей структуры, ее тег, а также предоставляется
+///    информация о порядковом индексе элемента
+/// 10. [`Label`]. Прочитан индекс метки, по этому индексу может быть прочитано значение метки
+/// 11. [`Value`]. Прочитан индекс большого значения (больше 4-х байт), по этому индексу само
+///     значение может быть прочитано отдельным вызовом
+/// 12. [`ItemEnd`]. Элемент списка прочитан
+/// 13. [`ListEnd`]. Весь список прочитан
+/// 14. [`RootEnd`]. Файл прочитан
+///
+/// # Пример
+/// В данном примере читается файл с диска, и в потоковом режиме выводится на экран, формируя
+/// что-то, напоминающее JSON.
+///
+/// ```rust
+/// # extern crate serde_gff;
+/// use std::fs::File;
+/// use serde_gff::parser::Parser;
+/// use serde_gff::parser::Token::*;
+///
+/// // Читаем файл с диска и создаем парсер. При создании парсер сразу же читает небольшую
+/// // порцию данных -- заголовок, которая нужна ему для правильного разрешения ссылок
+/// let file = File::open("test-data/all.gff").expect("test file not exist");
+/// let mut parser = Parser::new(file).expect("reading GFF header failed");
+/// let mut indent = 0;
+/// loop {
+///   // В данном случае мы используем методы типажа Iterator для итерирования по файлу, так
+///   // как мы полагаем, что ошибок в процессе чтения не возникнет. Если же они интересны,
+///   // следует использовать метод `next_token`
+///   if let Some(token) = parser.next() {
+///     match token {
+///       RootBegin {..} | RootEnd => {},
+///       // Обрамляем структуры в `{ ... }`
+///       StructBegin {..} => { indent += 1; println!("{{"); },
+///       StructEnd        => { indent -= 1; println!("{:indent$}}}", "", indent=indent*2); },
+///       // Обрамляем списки в `[ ... ]`
+///       ListBegin {..}   => { indent += 1; println!("["); },
+///       ListEnd          => { indent -= 1; println!("{:indent$}]", "", indent=indent*2); },
+///       // Обрамляем элементы списков в `[index]: { ... }`
+///       ItemBegin { index, .. } => {
+///         println!("{:indent$}[{}]: {{", "", index, indent=indent*2);
+///         indent += 1;
+///       },
+///       ItemEnd => {
+///         indent -= 1;
+///         println!("{:indent$}}}", "", indent=indent*2);
+///       },
+///
+///       Label(index) => {
+///         // Физически значение меток хранится в другом месте файла. Так как при итерировании они
+///         // могут быть нам неинтересны, то токен содержит только индекс используемой метки (имени
+///         // поля). В данном же случае они нас интересуют, поэтому выполняем полное чтение
+///         let label = parser.read_label(index).expect(&format!("can't read label {:?}", index));
+///         print!("{:indent$}{}: ", "", label, indent=indent*2)
+///       },
+///
+///       // Аналогично со значениями. Некоторые значения доступны сразу (те, чей размер не превышает
+///       // 4 байта), другие хранятся с других частях файла и должны быть явно прочитаны.
+///       // Также, если вас интересует только какое-то конкретное значение, может быть использован
+///       // один из методов `read_*` парсера
+///       Value(value) => println!("{:?}", parser.read_value(value).expect("can't read value")),
+///     }
+///     continue;
+///   }
+///   // Как только итератор возвращает None, файл закончился, либо произошла ошибка; завершаем работу
+///   break;
+/// }
+/// ```
+///
+/// [токенам]: enum.Token.html
+/// [`next_token`]: struct.Parser.html#method.next_token
+/// [`RootBegin`]: enum.Token.html#variant.RootBegin
+/// [`RootEnd`]: enum.Token.html#variant.RootEnd
+/// [`StructBegin`]: enum.Token.html#variant.StructBegin
+/// [`StructEnd`]: enum.Token.html#variant.StructEnd
+/// [`ListBegin`]: enum.Token.html#variant.ListBegin
+/// [`ListEnd`]: enum.Token.html#variant.ListEnd
+/// [`ItemBegin`]: enum.Token.html#variant.ItemBegin
+/// [`ItemEnd`]: enum.Token.html#variant.ItemEnd
+/// [`Label`]: enum.Token.html#variant.Label
+/// [`Value`]: enum.Token.html#variant.Value
 pub struct Parser<R: Read + Seek> {
   /// Источник данных для чтения элементов GFF-файла
   reader: R,
@@ -148,6 +277,36 @@ impl<R: Read + Seek> Parser<R> {
   pub fn read_byte_buf(&mut self, index: BinaryIndex) -> Result<Vec<u8>> {
     self.seek(index)?;
     self.read_bytes()
+  }
+  /// Если `value` содержит еще не прочитанные поля (т.е. содержащие [индексы]), читает их.
+  /// В противном случае просто преобразует тип значения в `SimpleValue`.
+  ///
+  /// Данный метод меняет внутреннюю позицию чтения парсера, однако это не несет за собой
+  /// негативных последствий, если сразу после вызова данного метода выполнить переход к
+  /// следующему токену при итерации по токенам парсера. См. пример в описании структуры
+  /// [`Parser`].
+  ///
+  /// [индексы]: ../index/trait.Index.html
+  /// [`Parser`]: struct.Parser.html
+  pub fn read_value(&mut self, value: SimpleValueRef) -> Result<SimpleValue> {
+    use self::SimpleValueRef::*;
+
+    Ok(match value {
+      Byte(val)     => SimpleValue::Byte(val),
+      Char(val)     => SimpleValue::Char(val),
+      Word(val)     => SimpleValue::Word(val),
+      Short(val)    => SimpleValue::Short(val),
+      Dword(val)    => SimpleValue::Dword(val),
+      Int(val)      => SimpleValue::Int(val),
+      Dword64(val)  => SimpleValue::Dword64(self.read_u64(val)?),
+      Int64(val)    => SimpleValue::Int64(self.read_i64(val)?),
+      Float(val)    => SimpleValue::Float(val),
+      Double(val)   => SimpleValue::Double(self.read_f64(val)?),
+      String(val)   => SimpleValue::String(self.read_string(val)?),
+      ResRef(val)   => SimpleValue::ResRef(self.read_resref(val)?),
+      LocString(val)=> SimpleValue::LocString(self.read_loc_string(val)?),
+      Void(val)     => SimpleValue::Void(self.read_byte_buf(val)?),
+    })
   }
 //-------------------------------------------------------------------------------------------------
   /// Позиционирует нижележащий считыватель в место, указуемое данным индексом данных GFF.
