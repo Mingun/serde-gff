@@ -7,3 +7,12 @@ extern crate byteorder;
 mod sig;
 mod ver;
 pub mod header;
+
+// Модули, чье содержимое реэкспортируется, разделено для удобства сопровождения
+mod label;
+mod resref;
+mod string;
+
+pub use label::*;
+pub use resref::*;
+pub use string::*;
