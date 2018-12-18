@@ -8,6 +8,9 @@ mod sig;
 mod ver;
 pub mod header;
 
+pub mod index;
+pub mod value;
+
 // Модули, чье содержимое реэкспортируется, разделено для удобства сопровождения
 mod label;
 mod resref;
