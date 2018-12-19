@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 extern crate byteorder;
 extern crate encoding;
+extern crate indexmap;
 
 // Модули описания заголовка
 mod sig;
