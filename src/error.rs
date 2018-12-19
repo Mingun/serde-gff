@@ -25,6 +25,9 @@ pub enum Error {
   },
   /// Разбор уже завершен
   ParsingFinished,
+  /// Некорректное значение для метки. Метка не должна превышать по длине 16 байт в UTF-8,
+  /// но указанное значение больше. Ошибка содержит длину текста, который пытаются преобразовать
+  TooLongLabel(usize),
 }
 /// Тип результата, используемый в методах данной библиотеки
 pub type Result<T> = result::Result<T, Error>;
@@ -36,6 +39,7 @@ impl fmt::Display for Error {
       Encoding(ref msg) => msg.fmt(fmt),
       UnknownValue { tag, value } => write!(fmt, "Unknown field value (tag: {}, value: {})", tag, value),
       ParsingFinished => write!(fmt, "Parsing finished"),
+      TooLongLabel(len) => write!(fmt, "Too long label: label can contain up to 16 bytes, but string contains {} bytes in UTF-8", len),
     }
   }
 }
@@ -47,6 +51,7 @@ impl error::Error for Error {
       Encoding(ref msg) => msg,
       UnknownValue { .. } => "Unknown field value",
       ParsingFinished => "Parsing finished",
+      TooLongLabel(..) => "Too long label",
     }
   }
 

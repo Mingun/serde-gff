@@ -3,7 +3,8 @@
 
 use std::fmt;
 use std::result::Result;
-use std::str::{from_utf8, Utf8Error};
+use std::str::{from_utf8, FromStr, Utf8Error};
+use error::Error;
 
 /// Описание названия поля структуры GFF файла. GFF файл состоит из дерева структур, а каждая
 /// структура -- из полей с именем и значением. Имена полей представлены данной структурой
@@ -21,6 +22,22 @@ impl Label {
       }
     }
     return from_utf8(&self.0);
+  }
+
+  /// Пытается создать метку из указанного массива байт.
+  ///
+  /// # Ошибки
+  /// В случае, если длина среза равна или превышает 16 байт, возвращается ошибка
+  /// [`Error::TooLongLabel`](./error/enum.Error.html#variant.TooLongLabel)
+  pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+    if bytes.len() > 16 {
+      return Err(Error::TooLongLabel(bytes.len()));
+    }
+
+    let mut storage: [u8; 16] = Default::default();
+    let range = 0..bytes.len();
+    storage[range.clone()].copy_from_slice(&bytes[range]);
+    Ok(storage.into())
   }
 }
 
@@ -48,4 +65,25 @@ impl From<[u8; 16]> for Label {
 
 impl AsRef<[u8]> for Label {
   fn as_ref(&self) -> &[u8] { &self.0 }
+}
+
+impl FromStr for Label {
+  type Err = Error;
+
+  #[inline]
+  fn from_str(value: &str) -> Result<Self, Error> {
+    Self::from_bytes(value.as_bytes())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::Label;
+
+  #[test]
+  fn label_constructs_from_str() {
+    assert_eq!(Label::from(*b"short\0\0\0\0\0\0\0\0\0\0\0"), "short".parse().unwrap());
+    assert_eq!(Label::from(*b"exact_16_chars_\0"), "exact_16_chars_".parse().unwrap());
+    assert!("more_then_16_char".parse::<Label>().is_err());
+  }
 }
