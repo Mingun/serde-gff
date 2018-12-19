@@ -178,3 +178,49 @@ impl<'de, 'a, R: Read + Seek> de::MapAccess<'de> for &'a mut Deserializer<R> {
     seed.deserialize(&mut **self)
   }
 }
+
+#[cfg(test)]
+mod empty_file {
+  //! Тестирование разбора пустого файла - содержащего только заголовок и структуру верхнего уровня
+  use std::fs::File;
+  use serde::de::Deserialize;
+  use super::Deserializer;
+
+  fn run<'de, T: Deserialize<'de>>(type_name: &str) -> T {
+    // Читаемый файл содержит только одну пустую структуру верхнего уровня
+    let file = File::open("test-data/empty.gff").expect("test file 'empty.gff' not exist");
+    let mut deserializer = Deserializer::new(file).expect("can't read GFF header");
+
+    Deserialize::deserialize(&mut deserializer).expect(&format!("can't deserialize to {}", type_name))
+  }
+
+  #[test]
+  fn to_unit() {
+    let _test: () = run("()");
+  }
+
+  #[test]
+  fn to_unit_struct() {
+    #[derive(Deserialize)]
+    struct Unit;
+
+    let _test: Unit = run("unit struct");
+  }
+
+  #[test]
+  fn to_empty_struct() {
+    #[derive(Deserialize)]
+    struct Empty {}
+
+    let _test: Empty = run("empty struct");
+  }
+
+  #[test]
+  #[should_panic(expected = "missing field `_value`")]
+  fn to_struct() {
+    #[derive(Deserialize)]
+    struct Struct { _value: i32 }
+
+    let _test: Struct = run("struct with fields");
+  }
+}

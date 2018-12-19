@@ -5,6 +5,9 @@ extern crate byteorder;
 extern crate encoding;
 extern crate indexmap;
 extern crate serde;
+#[cfg(test)]
+#[macro_use]
+extern crate serde_derive;
 
 // Модули описания заголовка
 mod sig;
