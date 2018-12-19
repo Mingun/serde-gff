@@ -8,6 +8,8 @@ use value::SimpleValueRef;
 use error::{Error, Result};
 use parser::{Parser, Token};
 
+mod value;
+
 /// Структура для поддержки чтения GFF файлов в экосистеме serde
 pub struct Deserializer<R: Read + Seek> {
   /// Итератор, поставляющий токены в процессе разбора файла
