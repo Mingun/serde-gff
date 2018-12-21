@@ -14,6 +14,7 @@ pub mod parser;
 pub mod index;
 pub mod value;
 pub mod error;
+pub mod raw;
 
 // Модули, чье содержимое реэкспортируется, разделено для удобства сопровождения
 mod label;
