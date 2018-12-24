@@ -1,7 +1,7 @@
 serde-gff
 =========
 [![Crates.io](https://img.shields.io/crates/v/serde_gff.svg)](https://crates.io/crates/serde_gff)
-[![Документация](https://docs.rs/serde_gff/badge.svg)](https://docs.rs/serde_gff)
+[![Документация](https://docs.rs/serde-gff/badge.svg)](https://docs.rs/serde-gff)
 [![Лицензия MIT](https://img.shields.io/crates/l/serde_gff.svg)](https://github.com/Mingun/serde-gff/blob/master/LICENSE)
 
 Generic File Format (GFF) -- формат файлов, используемый играми на движке Bioware Aurora:
