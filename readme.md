@@ -21,7 +21,7 @@ cargo add serde_gff
 или добавьте следующую строку в `Cargo.toml`:
 ```toml
 [dependencies]
-serde_gff = "0.1.0"
+serde_gff = "0.2"
 ```
 
 Пример

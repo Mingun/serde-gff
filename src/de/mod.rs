@@ -82,7 +82,13 @@ impl<R: Read + Seek> Deserializer<R> {
       Float(val)    => visitor.visit_f32(val),
       Double(val)   => visitor.visit_f64(self.parser.read_f64(val)?),
       String(val)   => visitor.visit_string(self.parser.read_string(val)?),
-      ResRef(val)   => visitor.visit_byte_buf(self.parser.read_resref(val)?.0),
+      ResRef(val)   => {
+        let resref = self.parser.read_resref(val)?;
+        if let Ok(str) = resref.as_str() {
+          return visitor.visit_str(str);
+        }
+        visitor.visit_byte_buf(resref.0)
+      },
       LocString(val)=> {
         let value = self.parser.read_loc_string(val)?;
         //TODO: реализовать десериализацию LocString
