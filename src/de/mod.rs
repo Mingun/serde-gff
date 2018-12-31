@@ -2,12 +2,14 @@
 
 use std::io::{Read, Seek};
 use encoding::{DecoderTrap, EncodingRef};
-use serde::de::{self, Visitor, DeserializeSeed};
+use serde::de::{self, Visitor, DeserializeSeed, IntoDeserializer};
 
+use string::GffString;
 use value::SimpleValueRef;
 use error::{Error, Result};
 use parser::{Parser, Token};
 
+mod string;
 mod value;
 
 /// Структура для поддержки чтения GFF файлов в экосистеме serde
@@ -90,9 +92,10 @@ impl<R: Read + Seek> Deserializer<R> {
         visitor.visit_byte_buf(resref.0)
       },
       LocString(val)=> {
-        let value = self.parser.read_loc_string(val)?;
-        //TODO: реализовать десериализацию LocString
-        Err(Error::Deserialize(format!("Deserialization of LocString not yet implemented: value={:?}", value)))
+        use serde::Deserializer;
+
+        let value: GffString = self.parser.read_loc_string(val)?.into();
+        value.into_deserializer().deserialize_any(visitor)
       },
       Void(val)     => visitor.visit_byte_buf(self.parser.read_byte_buf(val)?),
     }

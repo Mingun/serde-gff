@@ -79,6 +79,7 @@
 extern crate byteorder;
 extern crate encoding;
 extern crate indexmap;
+#[macro_use]
 extern crate serde;
 #[cfg(test)]
 #[macro_use]
