@@ -358,7 +358,7 @@ impl<R: Read + Seek> Parser<R> {
     Ok(SubString {
       // Оба перечисления имеют С представление, поэтому transmute безопасен
       gender  : unsafe { transmute(id %  2) },
-      language: unsafe { transmute(id >> 2) },
+      language: unsafe { transmute(id >> 1) },
       string  : self.read_string_impl()?
     })
   }
