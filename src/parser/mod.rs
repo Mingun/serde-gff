@@ -2,7 +2,6 @@
 
 use std::iter::FusedIterator;
 use std::io::{Read, Seek, SeekFrom};
-use std::mem::transmute;
 use byteorder::{LE, ReadBytesExt};
 use encoding::{EncodingRef, DecoderTrap};
 use encoding::all::UTF_8;
@@ -11,7 +10,7 @@ use {Label, SubString, ResRef, StrRef};
 use error::{Error, Result};
 use header::Header;
 use index::{Index, LabelIndex, U64Index, I64Index, F64Index, StringIndex, ResRefIndex, LocStringIndex, BinaryIndex};
-use string::LocString;
+use string::{LocString, StringKey};
 use value::{SimpleValue, SimpleValueRef};
 
 mod token;
@@ -353,13 +352,9 @@ impl<R: Read + Seek> Parser<R> {
   }
   #[inline]
   fn read_substring(&mut self) -> Result<SubString> {
-    let id = self.read_u32()?;
-
     Ok(SubString {
-      // Оба перечисления имеют С представление, поэтому transmute безопасен
-      gender  : unsafe { transmute(id %  2) },
-      language: unsafe { transmute(id >> 1) },
-      string  : self.read_string_impl()?
+      key   : StringKey(self.read_u32()?),
+      string: self.read_string_impl()?,
     })
   }
   /// Читает из потока примитивное значение в соответствии с указанным тегом
