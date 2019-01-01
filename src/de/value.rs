@@ -1,10 +1,12 @@
 //! Содержит реализацию типажа `Deserialize` для десериализации типа `Value`
 
 use std::fmt;
+use std::marker::PhantomData;
 use indexmap::IndexMap;
-use serde::de::{Deserialize, Deserializer, Error, SeqAccess, MapAccess, Visitor};
+use serde::de::{Deserialize, Deserializer, Error, IntoDeserializer, SeqAccess, MapAccess, Visitor};
 
 use Label;
+use string::GffString;
 use value::Value;
 
 /// Структура для конвертации событий десериализации от serde в объект `Label`
@@ -52,6 +54,45 @@ impl<'de> Deserialize<'de> for Label {
   {
     deserializer.deserialize_any(LabelVisitor)
   }
+}
+
+/// Десериализатор, в котором источником данных является метка
+#[derive(Debug)]
+pub struct LabelDeserializer<E> {
+  /// Источник данных, из которого достаются данные для десериализации других структур
+  value: Label,
+  /// Фиктивный элемент, для связывания типа ошибки `E`
+  marker: PhantomData<E>,
+}
+impl<'de, E> IntoDeserializer<'de, E> for Label
+  where E: Error,
+{
+  type Deserializer = LabelDeserializer<E>;
+
+  #[inline]
+  fn into_deserializer(self) -> Self::Deserializer {
+    LabelDeserializer { value: self, marker: PhantomData }
+  }
+}
+impl<'de, E> Deserializer<'de> for LabelDeserializer<E>
+  where E: Error,
+{
+  type Error = E;
+
+  fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where V: Visitor<'de>,
+  {
+    if let Ok(str) = self.value.as_str() {
+      return visitor.visit_str(str);
+    }
+    visitor.visit_bytes(self.value.as_ref())
+  }
+
+  forward_to_deserialize_any!(
+    bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str
+    string bytes byte_buf option unit unit_struct newtype_struct seq
+    tuple tuple_struct map struct enum identifier ignored_any
+  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -153,4 +194,74 @@ impl<'de> Deserialize<'de> for Value {
   {
     deserializer.deserialize_any(ValueVisitor)
   }
+}
+
+/// Десериализатор, в котором источником данных является GFF значение
+#[derive(Debug)]
+pub struct ValueDeserializer<E> {
+  /// Источник данных, из которого достаются данные для десериализации других структур
+  value: Value,
+  /// Фиктивный элемент, для связывания типа ошибки `E`
+  marker: PhantomData<E>,
+}
+impl<'de, E> IntoDeserializer<'de, E> for Value
+  where E: Error,
+{
+  type Deserializer = ValueDeserializer<E>;
+
+  #[inline]
+  fn into_deserializer(self) -> Self::Deserializer {
+    ValueDeserializer { value: self, marker: PhantomData }
+  }
+}
+impl<'de, E> Deserializer<'de> for ValueDeserializer<E>
+  where E: Error,
+{
+  type Error = E;
+
+  #[inline]
+  fn is_human_readable(&self) -> bool { false }
+
+  fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where V: Visitor<'de>,
+  {
+    use self::Value::*;
+
+    match self.value {
+      Byte(val)      => visitor.visit_u8(val),
+      Char(val)      => visitor.visit_i8(val),
+      Word(val)      => visitor.visit_u16(val),
+      Short(val)     => visitor.visit_i16(val),
+      Dword(val)     => visitor.visit_u32(val),
+      Int(val)       => visitor.visit_i32(val),
+      Dword64(val)   => visitor.visit_u64(val),
+      Int64(val)     => visitor.visit_i64(val),
+      Float(val)     => visitor.visit_f32(val),
+      Double(val)    => visitor.visit_f64(val),
+      String(val)    => visitor.visit_string(val),
+      ResRef(val)    => {
+        if let Ok(str) = val.as_str() {
+          return visitor.visit_str(str);
+        }
+        visitor.visit_byte_buf(val.0)
+      },
+      LocString(val) => {
+        let value: GffString = val.into();
+        value.into_deserializer().deserialize_any(visitor)
+      },
+      Void(val)      => visitor.visit_byte_buf(val),
+      Struct(val)    => {
+        //TODO: После мерджа https://github.com/bluss/indexmap/pull/87 можно заменить на into_deserializer()
+        use serde::de::value::MapDeserializer;
+        MapDeserializer::new(val.into_iter()).deserialize_any(visitor)
+      },
+      List(val)      => val.into_deserializer().deserialize_any(visitor),
+    }
+  }
+
+  forward_to_deserialize_any!(
+    bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str
+    string bytes byte_buf option unit unit_struct newtype_struct seq
+    tuple tuple_struct map struct enum identifier ignored_any
+  );
 }

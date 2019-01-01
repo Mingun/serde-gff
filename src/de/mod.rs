@@ -2,10 +2,9 @@
 
 use std::io::{Read, Seek};
 use encoding::{DecoderTrap, EncodingRef};
-use serde::de::{self, Visitor, DeserializeSeed, IntoDeserializer};
+use serde::de::{self, IntoDeserializer, Visitor, DeserializeSeed};
 
-use string::GffString;
-use value::SimpleValueRef;
+use value::{SimpleValueRef, Value};
 use error::{Error, Result};
 use parser::{Parser, Token};
 
@@ -70,35 +69,10 @@ impl<R: Read + Seek> Deserializer<R> {
   fn deserialize_value<'de, V>(&mut self, value: SimpleValueRef, visitor: V) -> Result<V::Value>
     where V: Visitor<'de>,
   {
-    use self::SimpleValueRef::*;
+    use serde::Deserializer;
 
-    match value {
-      Byte(val)     => visitor.visit_u8(val),
-      Char(val)     => visitor.visit_i8(val),
-      Word(val)     => visitor.visit_u16(val),
-      Short(val)    => visitor.visit_i16(val),
-      Dword(val)    => visitor.visit_u32(val),
-      Int(val)      => visitor.visit_i32(val),
-      Dword64(val)  => visitor.visit_u64(self.parser.read_u64(val)?),
-      Int64(val)    => visitor.visit_i64(self.parser.read_i64(val)?),
-      Float(val)    => visitor.visit_f32(val),
-      Double(val)   => visitor.visit_f64(self.parser.read_f64(val)?),
-      String(val)   => visitor.visit_string(self.parser.read_string(val)?),
-      ResRef(val)   => {
-        let resref = self.parser.read_resref(val)?;
-        if let Ok(str) = resref.as_str() {
-          return visitor.visit_str(str);
-        }
-        visitor.visit_byte_buf(resref.0)
-      },
-      LocString(val)=> {
-        use serde::Deserializer;
-
-        let value: GffString = self.parser.read_loc_string(val)?.into();
-        value.into_deserializer().deserialize_any(visitor)
-      },
-      Void(val)     => visitor.visit_byte_buf(self.parser.read_byte_buf(val)?),
-    }
+    let value: Value = self.parser.read_value(value)?.into();
+    value.into_deserializer().deserialize_any(visitor)
   }
 }
 
