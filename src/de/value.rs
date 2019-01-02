@@ -1,13 +1,92 @@
 //! Содержит реализацию типажа `Deserialize` для десериализации типа `Value`
 
+use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use indexmap::IndexMap;
 use serde::de::{Deserialize, Deserializer, Error, IntoDeserializer, SeqAccess, MapAccess, Visitor};
 
 use Label;
-use string::GffString;
+use string::{GffString, StringKey};
 use value::Value;
+
+macro_rules! string_key {
+  ($method:ident, $type:ty) => (
+    #[inline]
+    fn $method<E>(self, value: $type) -> Result<Key, E>
+      where E: Error,
+    {
+      Ok(Key::String(StringKey(value as u32)))
+    }
+  );
+}
+/// Возможные представления ключа отображений в форматах данных
+enum Key {
+  /// Ключ отображения является строкой, символом или массивом байт и соответствует
+  /// метке поля
+  Label(Label),
+  /// Ключ отображения является числом и соответствует элементу многоязыковой строки
+  String(StringKey),
+}
+/// Структура для конвертации событий десериализации от serde в объект `Key`
+struct KeyVisitor;
+
+impl<'de> Visitor<'de> for KeyVisitor {
+  type Value = Key;
+
+  fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    formatter.write_str("a string with length in UTF-8 <=16, byte buffer with length <=16, char or integer")
+  }
+
+  string_key!(visit_u8, u8);
+  string_key!(visit_i8, i8);
+  string_key!(visit_u16, u16);
+  string_key!(visit_i16, i16);
+  string_key!(visit_u32, u32);
+  string_key!(visit_i32, i32);
+  string_key!(visit_u64, u64);
+  string_key!(visit_i64, i64);
+  string_key!(visit_u128, u128);
+  string_key!(visit_i128, i128);
+
+  #[inline]
+  fn visit_char<E>(self, value: char) -> Result<Key, E>
+    where E: Error,
+  {
+    self.visit_string(value.to_string())
+  }
+  #[inline]
+  fn visit_str<E>(self, value: &str) -> Result<Key, E>
+    where E: Error,
+  {
+    self.visit_bytes(value.as_bytes())
+  }
+
+  #[inline]
+  fn visit_bytes<E>(self, value: &[u8]) -> Result<Key, E>
+    where E: Error,
+  {
+    use error::Error::TooLongLabel;
+
+    match Label::from_bytes(value) {
+      Ok(label) => Ok(Key::Label(label)),
+      Err(TooLongLabel(len)) => Err(E::invalid_length(len, &self)),
+      Err(err) => Err(E::custom(err)),// На самом деле, этот вариант невозможен
+    }
+  }
+}
+
+/// Десериализует метку из строки или массива байт
+impl<'de> Deserialize<'de> for Key {
+  #[inline]
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: Deserializer<'de>,
+  {
+    deserializer.deserialize_any(KeyVisitor)
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Структура для конвертации событий десериализации от serde в объект `Label`
 struct LabelVisitor;
@@ -176,13 +255,34 @@ impl<'de> Visitor<'de> for ValueVisitor {
   fn visit_map<V>(self, mut map: V) -> Result<Value, V::Error>
     where V: MapAccess<'de>,
   {
-    let mut values = IndexMap::with_capacity(map.size_hint().unwrap_or(0));
+    let size = map.size_hint().unwrap_or(0);
 
-    while let Some((key, value)) = map.next_entry()? {
-      values.insert(key, value);
+    if let Some(key) = map.next_key()? {
+      match key {
+        Key::Label(label) => {
+          let mut values = IndexMap::with_capacity(size);
+          values.insert(label, map.next_value()?);
+
+          while let Some((key, value)) = map.next_entry()? {
+            values.insert(key, value);
+          }
+
+          Ok(Value::Struct(values))
+        },
+        Key::String(key) => {
+          let mut values = HashMap::with_capacity(size);
+          values.insert(key, map.next_value()?);
+
+          while let Some((key, value)) = map.next_entry()? {
+            values.insert(StringKey(key), value);
+          }
+
+          Ok(Value::LocString(GffString::Internal(values).into()))
+        },
+      }
+    } else {
+      Ok(Value::Struct(IndexMap::with_capacity(0)))
     }
-
-    Ok(Value::Struct(values))
   }
   //visit_enum - не поддерживается
 }
