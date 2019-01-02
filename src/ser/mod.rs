@@ -14,6 +14,8 @@ use index::LabelIndex;
 use value::SimpleValueRef;
 use raw::{self, FieldType};
 
+mod value;
+
 /// Вспомогательная структура, описывающая индекс структуры, для типобезопасности
 #[derive(Debug, Copy, Clone)]
 struct StructIndex(usize);
@@ -27,8 +29,6 @@ struct FieldListIndex(usize);
 /// Вспомогательная структура, описывающая индекс списка элементов GFF списка, для типобезопасности
 #[derive(Debug, Copy, Clone)]
 struct ListIndex(usize);
-
-mod value;
 
 /// Промежуточное представление сериализуемых структур. Содержит данные, которые после
 /// небольшого преобразования, возможного только после окончания сериализации, могут
