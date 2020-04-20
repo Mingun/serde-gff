@@ -3,9 +3,10 @@
 
 use std::marker::PhantomData;
 
+use serde::forward_to_deserialize_any;
 use serde::de::{Deserializer, Error, IntoDeserializer, Visitor};
 
-use string::{GffString, StringKey};
+use crate::string::{GffString, StringKey};
 
 impl<'de, E> IntoDeserializer<'de, E> for StringKey
   where E: Error,

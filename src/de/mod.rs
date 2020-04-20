@@ -4,9 +4,9 @@ use std::io::{Read, Seek};
 use encoding::{DecoderTrap, EncodingRef};
 use serde::de::{self, IntoDeserializer, Visitor, DeserializeSeed};
 
-use value::{SimpleValueRef, Value};
-use error::{Error, Result};
-use parser::{Parser, Token};
+use crate::value::{SimpleValueRef, Value};
+use crate::error::{Error, Result};
+use crate::parser::{Parser, Token};
 
 mod string;
 mod value;
@@ -82,7 +82,7 @@ impl<R: Read + Seek> Deserializer<R> {
 /// - `dser_method`: реализуемый макросом метод
 /// - `visit_method`: метод типажа [`Visitor`], который будет вызван для создания конечного значения
 /// - `type`: тип GFF файла, одно из значений перечисления [`SimpleValueRef`]
-/// 
+///
 /// [`Visitor`]: https://docs.serde.rs/serde/de/trait.Visitor.html
 /// [`SimpleValueRef`]: ../enum.SimpleValueRef.html
 macro_rules! primitive {
@@ -465,7 +465,7 @@ impl<'de, 'a, R: 'a + Read + Seek> de::Deserializer<'de> for Field<'a, R> {
 mod empty_file {
   //! Тестирование разбора пустого файла - содержащего только заголовок и структуру верхнего уровня
   use std::fs::File;
-  use serde::de::Deserialize;
+  use serde::Deserialize;
   use super::Deserializer;
 
   fn run<'de, T: Deserialize<'de>>(type_name: &str) -> T {

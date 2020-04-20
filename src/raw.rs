@@ -5,8 +5,8 @@ use std::fmt;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write, Result};
 use byteorder::{LE, ReadBytesExt, WriteBytesExt};
 
-use header::Header;
-use Label;
+use crate::header::Header;
+use crate::Label;
 
 /// Типы полей, которые возможно встретить в GFF файле
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

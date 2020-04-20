@@ -10,7 +10,7 @@ use std::string::FromUtf8Error;
 use serde::de;
 use serde::ser;
 
-use parser::Token;
+use crate::parser::Token;
 use self::Error::*;
 
 /// Виды ошибок, который могут возникнуть при чтении и интерпретации GFF-файла

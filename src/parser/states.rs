@@ -1,9 +1,9 @@
 //! Состояния парсера GFF-формата
 
 use std::io::{Read, Seek};
-use index::{FieldIndex, FieldIndicesIndex, LabelIndex, ListIndicesIndex, StructIndex};
-use error::{Error, Result};
-use parser::{Parser, Token, Tag};
+use crate::index::{FieldIndex, FieldIndicesIndex, LabelIndex, ListIndicesIndex, StructIndex};
+use crate::error::{Error, Result};
+use crate::parser::{Parser, Token, Tag};
 use self::State::*;
 
 /// Возможные состояния, в которых может находиться парсер

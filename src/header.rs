@@ -4,8 +4,8 @@ use std::cmp::max;
 use std::io::{Read, Write, Result};
 use byteorder::{LE, ReadBytesExt, WriteBytesExt};
 
-pub use sig::*;
-pub use ver::*;
+pub use crate::sig::*;
+pub use crate::ver::*;
 
 /// Описание области файла, описывающей местоположение списков записей в файле
 #[derive(Debug, Default)]

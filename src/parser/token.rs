@@ -1,5 +1,5 @@
-use index::LabelIndex;
-use value::SimpleValueRef;
+use crate::index::LabelIndex;
+use crate::value::SimpleValueRef;
 use super::Tag;
 
 /// Возможные виды событий, которые могут возникнуть при чтении GFF файла. Отражают

@@ -8,16 +8,10 @@
 //!
 //! # Пример
 //! ```rust
-//! extern crate serde;
-//! #[macro_use]
-//! extern crate serde_derive;
-//! extern crate serde_bytes;
-//! extern crate serde_gff;
-//!
 //! use std::f32::consts::PI;
 //! use std::f64::consts::E;
 //! use std::io::Cursor;
-//! use serde::Deserialize;
+//! use serde::{Serialize, Deserialize};
 //!
 //! use serde_gff::de::Deserializer;
 //! use serde_gff::ser::to_vec;
@@ -71,19 +65,11 @@
 //!   // Result, а не сам десериализатор, поэтому требуется распаковка результата
 //!   let mut de = Deserializer::new(Cursor::new(vec)).expect("can't read GFF header");
 //!   let val = Value::deserialize(&mut de).expect("can't deserialize data");
-//!  
+//!
 //!   println!("{:#?}", val);
 //! }
 //! ```
 #![warn(missing_docs)]
-extern crate byteorder;
-extern crate encoding;
-extern crate indexmap;
-#[macro_use]
-extern crate serde;
-#[cfg(test)]
-#[macro_use]
-extern crate serde_derive;
 
 // Модули описания заголовка
 mod sig;
@@ -101,9 +87,9 @@ mod label;
 mod resref;
 mod string;
 
-pub use label::*;
-pub use resref::*;
-pub use string::*;
+pub use crate::label::*;
+pub use crate::resref::*;
+pub use crate::string::*;
 
 // Модули для поддержки инфраструктуры serde
 pub mod de;

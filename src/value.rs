@@ -2,8 +2,8 @@
 
 use indexmap::IndexMap;
 
-use {Label, LocString, ResRef};
-use index::{U64Index, I64Index, F64Index, StringIndex, ResRefIndex, LocStringIndex, BinaryIndex};
+use crate::{Label, LocString, ResRef};
+use crate::index::{U64Index, I64Index, F64Index, StringIndex, ResRefIndex, LocStringIndex, BinaryIndex};
 
 /// Перечисление, представляющее все примитивные типы данных, который может хранить GFF файл.
 ///

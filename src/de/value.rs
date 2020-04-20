@@ -4,11 +4,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use indexmap::IndexMap;
+use serde::forward_to_deserialize_any;
 use serde::de::{Deserialize, Deserializer, Error, IntoDeserializer, SeqAccess, MapAccess, Visitor};
 
-use Label;
-use string::{GffString, StringKey};
-use value::Value;
+use crate::Label;
+use crate::string::{GffString, StringKey};
+use crate::value::Value;
 
 macro_rules! string_key {
   ($method:ident, $type:ty) => (
@@ -66,7 +67,7 @@ impl<'de> Visitor<'de> for KeyVisitor {
   fn visit_bytes<E>(self, value: &[u8]) -> Result<Key, E>
     where E: Error,
   {
-    use error::Error::TooLongLabel;
+    use crate::error::Error::TooLongLabel;
 
     match Label::from_bytes(value) {
       Ok(label) => Ok(Key::Label(label)),
@@ -115,7 +116,7 @@ impl<'de> Visitor<'de> for LabelVisitor {
   fn visit_bytes<E>(self, value: &[u8]) -> Result<Label, E>
     where E: Error,
   {
-    use error::Error::TooLongLabel;
+    use crate::error::Error::TooLongLabel;
 
     match Label::from_bytes(value) {
       Ok(label) => Ok(label),

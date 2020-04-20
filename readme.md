@@ -27,16 +27,10 @@ serde_gff = "0.2"
 Пример
 ------
 ```rust
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_bytes;
-extern crate serde_gff;
-
 use std::f32::consts::PI;
 use std::f64::consts::E;
 use std::io::Cursor;
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 
 use serde_gff::de::Deserializer;
 use serde_gff::ser::to_vec;

@@ -7,12 +7,12 @@ use serde::ser::{self, Impossible, Serialize, SerializeMap, SerializeSeq,
                  SerializeStruct, SerializeTuple, SerializeTupleStruct,
                  SerializeTupleVariant, SerializeStructVariant};
 
-use Label;
-use error::{Error, Result};
-use header::{Header, Section, Signature, Version};
-use index::LabelIndex;
-use value::SimpleValueRef;
-use raw::{self, FieldType};
+use crate::Label;
+use crate::error::{Error, Result};
+use crate::header::{Header, Section, Signature, Version};
+use crate::index::LabelIndex;
+use crate::value::SimpleValueRef;
+use crate::raw::{self, FieldType};
 
 mod value;
 
@@ -942,12 +942,10 @@ impl<'a> SerializeMap for MapSerializer<'a> {
 
 #[cfg(test)]
 mod tests {
-  extern crate serde_bytes;
-
   use std::collections::BTreeMap;
-  use serde::ser::Serialize;
+  use serde::Serialize;
   use super::to_vec as to_vec_;
-  use self::serde_bytes::{Bytes, ByteBuf};
+  use serde_bytes::{Bytes, ByteBuf};
 
   /// Формирует байтовый массив, соответствующий сериализованной структуре с одним полем
   /// `value` заданного типа, который хранится в записи о самом поле.
@@ -1366,7 +1364,7 @@ mod tests {
   mod toplevel {
     //! Тестирует сериализацию различных значений, когда они не включены ни в какую структуру
     use super::*;
-    use error::Result;
+    use crate::error::Result;
 
     #[inline]
     fn to_result<T>(value: T) -> Result<Vec<u8>>
@@ -1763,7 +1761,7 @@ mod tests {
   mod as_field {
     //! Тестирует сериализацию различных значений, когда они включены как поле в структуру
     use super::*;
-    use error::Result;
+    use crate::error::Result;
 
     /// Сериализует значение, оборачивая его в структуру, т.к. формат не поддерживает на
     /// верхнем уровне ничего, кроме структур

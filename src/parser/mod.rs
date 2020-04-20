@@ -6,12 +6,12 @@ use byteorder::{LE, ReadBytesExt};
 use encoding::{EncodingRef, DecoderTrap};
 use encoding::all::UTF_8;
 
-use {Label, SubString, ResRef, StrRef};
-use error::{Error, Result};
-use header::Header;
-use index::{Index, LabelIndex, U64Index, I64Index, F64Index, StringIndex, ResRefIndex, LocStringIndex, BinaryIndex};
-use string::{LocString, StringKey};
-use value::{SimpleValue, SimpleValueRef};
+use crate::{Label, SubString, ResRef, StrRef};
+use crate::error::{Error, Result};
+use crate::header::Header;
+use crate::index::{Index, LabelIndex, U64Index, I64Index, F64Index, StringIndex, ResRefIndex, LocStringIndex, BinaryIndex};
+use crate::string::{LocString, StringKey};
+use crate::value::{SimpleValue, SimpleValueRef};
 
 mod token;
 mod states;
@@ -87,7 +87,6 @@ pub struct Tag(u32);
 /// что-то, напоминающее JSON.
 ///
 /// ```rust
-/// # extern crate serde_gff;
 /// use std::fs::File;
 /// use serde_gff::parser::Parser;
 /// use serde_gff::parser::Token::*;

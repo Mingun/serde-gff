@@ -4,7 +4,7 @@
 use std::fmt;
 use std::result::Result;
 use std::str::{from_utf8, FromStr, Utf8Error};
-use error::Error;
+use crate::error::Error;
 
 /// Описание названия поля структуры GFF файла. GFF файл состоит из дерева структур, а каждая
 /// структура -- из полей с именем и значением. Имена полей представлены данной структурой

@@ -2,8 +2,8 @@
 
 use serde::ser::{Serialize, SerializeMap, Serializer};
 
-use Label;
-use value::Value;
+use crate::Label;
+use crate::value::Value;
 
 impl Serialize for Label {
   #[inline]
