@@ -60,20 +60,7 @@ impl fmt::Display for Error {
 }
 
 impl error::Error for Error {
-  fn description(&self) -> &str {
-    match *self {
-      Io(ref err) => error::Error::description(err),
-      Encoding(ref msg) => msg,
-      UnknownValue { .. } => "Unknown field value",
-      ParsingFinished => "Parsing finished",
-      TooLongLabel(..) => "Too long label",
-      Unexpected(..) => "Unexpected token",
-      Deserialize(ref msg) => msg,
-      Serialize(ref msg) => msg,
-    }
-  }
-
-  fn cause(&self) -> Option<&error::Error> {
+  fn source(&self) -> Option<&(dyn error::Error + 'static)> {
     match *self {
       Io(ref err) => Some(err),
       _ => None,
@@ -89,10 +76,10 @@ impl From<Cow<'static, str>> for Error {
   fn from(value: Cow<'static, str>) -> Self { Encoding(value) }
 }
 impl From<Utf8Error> for Error {
-  fn from(value: Utf8Error) -> Self { Encoding(error::Error::description(&value).to_string().into()) }
+  fn from(value: Utf8Error) -> Self { Encoding(value.to_string().into()) }
 }
 impl From<FromUtf8Error> for Error {
-  fn from(value: FromUtf8Error) -> Self { Encoding(error::Error::description(&value).to_string().into()) }
+  fn from(value: FromUtf8Error) -> Self { Encoding(value.to_string().into()) }
 }
 
 impl de::Error for Error {
